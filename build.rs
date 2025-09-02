@@ -2,19 +2,17 @@
 
 #[cfg(target_os = "linux")]
 fn main() {
-    println!("cargo:rerun-if-changed=../core/src/c/co5_lib.c");
+    println!("cargo:rerun-if-changed=./src/c/co5_dl_osx.c");
     cc::Build::new()
-                .files(vec!["../core/src/c/co5_lib.c"])
-                .include("../core/src/c/headers")
-                .compile("co5_c_lib");
+                .files(vec!["../core/src/c/co5_dl_osx.c"])
+                .compile("co5_dl_c");
 }
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
-    println!("cargo:rerun-if-changed=./src/c/co5_osx_lib.c");
+    println!("cargo:rerun-if-changed=./src/c/co5_dl_osx.c");
     cc::Build::new()
                 .files(vec!["./src/c/co5_dl_osx.c"])
-                .include("./src/c/headers")
                 .flag("-w")
                 .flag("-mavx")
                 .compile("co5_dl_c");
