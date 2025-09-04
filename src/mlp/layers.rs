@@ -3,24 +3,26 @@
 use std::{ffi::{c_double, c_uchar, c_ulong}, mem};
 use num_traits::Float;
 
+use super::activation_functions::Activation;
+
 #[link(name="co5_dl_c", kind="static")]
 #[allow(improper_ctypes)]
 unsafe extern  "C"{ 
-    unsafe fn multiply(in1: *const c_double, out: *mut c_double);
+    unsafe fn multiply(in1: *const c_double, out: *mut c_double) -> c_uchar;
     unsafe fn init_kernel(o: c_ulong, w: c_ulong, k: *const c_double) -> c_uchar;
     unsafe fn drop() -> c_uchar;
 }
 
 pub trait Layer<F: Float>{
-    fn forward(&self, f: Vec<F>)-> Vec<F>;
+    fn forward(&self, f: Vec<F>, b: F)-> Vec<F>;
     fn generate_mapping(&self)-> Vec<(usize,usize)>;
 }
 
-pub(in crate) fn layer_factory<F: Float>(mut k: Vec<Vec<F>>, i: usize, s: F) -> impl Layer<F>{
+pub fn layer_factory<F: Float>(mut k: Vec<Vec<F>>, i: usize, s: F, a: Box<dyn Activation<F>>) -> impl Layer<F>{
     let o = i - k.len() + 1;
     let w = k.len();
     map_kernel::<F>(&mut k, s);
-    Default{i: i, w: w, o: o * o, seed: s}
+    Default{i: i, w: w, o: o * o, seed: s, a: a}
 }
 
 fn map_kernel<F: Float>(k: &mut Vec<Vec<F>>, s: F){
@@ -31,17 +33,15 @@ fn map_kernel<F: Float>(k: &mut Vec<Vec<F>>, s: F){
         tmp.append(&mut vec![s; 4 - fill]);
     }
     unsafe{
-        let (p, l, _) = Vec::into_raw_parts(tmp);
+        let (p, _, _) = Vec::into_raw_parts(tmp);
     
-        let f = init_kernel((w * w) as c_ulong, w as c_ulong,  p as *const c_double) as c_uchar;
-        //TODO FREE THE POINTER
-        if f != 0 {
+        if init_kernel((w * w) as c_ulong, w as c_ulong,  p as *const c_double) != 0 {
             panic!("failed to set kernel");
         }
     }
 }
 
-pub(in crate) fn flatten<F: Float>(k: &mut Vec<Vec<F>>)-> Vec<F>{
+pub(in crate::mlp) fn flatten<F: Float>(k: &mut Vec<Vec<F>>)-> Vec<F>{
     let shape = k.len();
     let mut tmp = Vec::<F>::with_capacity(shape * shape);
     for kr in k.iter_mut(){
@@ -57,7 +57,8 @@ struct Default<F: Float> {
     seed: F,
     o: usize,
     i: usize,
-    w: usize
+    w: usize,
+    a: Box<dyn Activation<F>>
 }
 
 impl<F: Float> Drop for Default<F>{
@@ -71,9 +72,8 @@ impl<F: Float> Drop for Default<F>{
 }
 
 impl<F: Float> Default<F>{
-    fn multiply(&self, f: Vec<F>)-> Vec<F>{
+    fn multiply(&self, f: Vec<F>, b: F)-> Vec<F>{
         let mut ret: Vec<F> = vec![self.seed; self.o];
-        //TODO make 4 the sse contstante
         let mut tmp: Vec<F> = vec![self.seed; f.len()];
         let mut sum: F = self.seed;
 
@@ -83,13 +83,17 @@ impl<F: Float> Default<F>{
             let out = tmp.as_mut_ptr() as *mut c_double;
             mem::forget(tmp);
             let (x_pntr, _x_len, _x_capacity) = f.into_raw_parts();
-            multiply(x_pntr as *const f64, out);
+            if multiply(x_pntr as *const f64, out) != 0{
+                panic!("failed to multiply");
+            }
             tmp = Vec::from_raw_parts(out as *mut F, len, capacity);
             for i in 0..(self.o * self.o){
                 if i > 0 && i % self.o == 0{
+                    self.a.calculate(&mut sum, b);
                     ret[i / self.o - 1] = sum;
                     sum = self.seed;
                 }
+                self.a.calculate(&mut sum, b);
                 sum = sum + tmp[i];
             }
             ret[self.o - 1] = sum;
@@ -100,8 +104,8 @@ impl<F: Float> Default<F>{
 
 impl<F: Float> Layer<F> for Default<F> {
 
-    fn forward(&self, f: Vec<F>)-> Vec<F>{
-        self.multiply(f)
+    fn forward(&self, f: Vec<F>, b: F)-> Vec<F>{
+        self.multiply(f, b)
     }
 
     fn generate_mapping(&self)-> Vec<(usize,usize)> {
