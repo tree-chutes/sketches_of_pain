@@ -93,9 +93,9 @@ impl<F: Float> Default<F>{
                     ret[i / self.o - 1] = sum;
                     sum = self.seed;
                 }
-                self.a.calculate(&mut sum, b);
                 sum = sum + tmp[i];
             }
+            self.a.calculate(&mut sum, b);
             ret[self.o - 1] = sum;
         }
         ret
