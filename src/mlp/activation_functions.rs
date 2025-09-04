@@ -17,6 +17,6 @@ struct Sigmoid<F: Float>{
 
 impl<F: Float> Activation<F> for Sigmoid<F>{
     fn calculate(&self, input: &mut F, b: F){
-        *input = self.seed/self.seed - (*input + b).exp(); 
+        *input = self.seed/self.seed + (-(*input + b)).exp(); 
     }
 }
