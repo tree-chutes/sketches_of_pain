@@ -2,7 +2,7 @@
 
 use num_traits::Float;
 use super::activation_functions::Activation;
-use std::{ffi::{c_double, c_uchar}, mem};
+use std::ffi::{c_double, c_uchar};
 
 use super::layers::Layer;
 
@@ -32,21 +32,16 @@ impl<F: Float> Drop for Conv2D<F>{
 }
 
 impl<F: Float> Conv2D<F>{
-    fn multiply(&self, f: Vec<F>, b: F)-> Vec<F>{
+    fn multiply(&self, f: &[F], b: F)-> Vec<F>{
         let mut ret: Vec<F> = vec![self.seed; self.o];
         let mut tmp: Vec<F> = vec![self.seed; f.len()];
         let mut sum: F = self.seed;
 
         unsafe{
-            let len = tmp.len();
-            let capacity = tmp.capacity();
             let out = tmp.as_mut_ptr() as *mut c_double;
-            mem::forget(tmp);
-            let (x_pntr, _x_len, _x_capacity) = f.into_raw_parts();
-            if multiply(x_pntr as *const f64, out) != 0{
+            if multiply(f.as_ptr() as *const f64, out) != 0{
                 panic!("failed to multiply");
             }
-            tmp = Vec::from_raw_parts(out as *mut F, len, capacity);
             for i in 0..(self.o * self.o){
                 if i > 0 && i % self.o == 0{
                     self.a.calculate(&mut sum, b);
@@ -68,7 +63,7 @@ impl<F: Float> Layer<F> for Conv2D<F> {
         self.o
     }
 
-    fn forward(&self, f: Vec<F>, b: F)-> Vec<F>{
+    fn forward(&self, f: &[F], b: F)-> Vec<F>{
         self.multiply(f, b)
     }
 
