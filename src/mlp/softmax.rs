@@ -14,7 +14,8 @@ impl <F: Float> Layer<F> for Softmax<F> {
     fn get_output_shape(&self)-> usize {
         self.i
     }
-    fn forward(&self, f: Vec<F>, _b: F)-> Vec<F> {
+    
+    fn forward(&self, f: &[F], _b: F)-> Vec<F> {
         if self.i != f.len(){
             panic!("f is out of shape: {}, o is {}", f.len(), self.i);
         }
