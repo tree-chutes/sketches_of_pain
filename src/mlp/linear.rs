@@ -62,7 +62,7 @@ impl<F: Float> Linear<F> {
         for i in 0..self.n {
             for _ in 0..self.m {
                 for j in 0..self.d {
-                    ret.push((i, j));
+                    ret.push((j, i));
                 }
             }
         }
