@@ -1,68 +1,78 @@
 //Copyright (c) 2025, tree-chutes
 
-use std::ffi::{c_double, c_uchar, c_ulong};
-
+use super::activation_functions::Activation;
 use super::conv2d::Conv2D;
+use super::linear::Linear;
 use super::softmax::Softmax;
 use num_traits::Float;
-use super::activation_functions::Activation;
-
-#[link(name="co5_dl_c", kind="static")]
-#[allow(improper_ctypes)]
-unsafe extern  "C"{ 
-    unsafe fn init_kernel(o: c_ulong, w: c_ulong, k: *const c_double) -> c_uchar;
-}
 
 pub enum Layers {
+    Linear,
     Conv2D,
-    Softmax
+    Softmax,
 }
 
-pub trait Layer<F: Float>{
-    fn forward(&self, f: &[F], b: F)-> Vec<F>;
-    fn generate_mapping(&self)-> Vec<(usize,usize)>;
-    fn get_output_shape(&self)-> usize;
-}
-
-pub fn layer_factory<F: Float + 'static>(n: Layers, k: Option<Vec<Vec<F>>>, i: usize, s: F, a: Option<Box<dyn Activation<F>>>) -> Box<dyn Layer<F>>{
-    match n {
-        Layers::Conv2D => Box::new(create_2d::<F>(k.unwrap(), i, s,a.unwrap())),
-        Layers::Softmax => Box::new(Softmax{i: i, seed: s})
+pub trait Layer<F: Float> {
+    fn forward(&self, w: &[F], f: &[F], b: F)-> Vec<F>;
+    fn differential(&self, s: &[F], p: &[F]) -> Vec<F> {
+        panic!("Should NOT be called");
+    }
+    fn get_output_shape(&self) -> usize {
+        println!("NOT Required");
+        0
     }
 }
 
-fn create_2d<F: Float>(k: Vec<Vec<F>>, i: usize, s: F, a: Box<dyn Activation<F>>)->Conv2D<F>{
-    let o = i - k.len() + 1;
-    let w = k.len();
-    map_kernel::<F>(k, s);
-    Conv2D{i: i, w: w, o: o * o, seed: s, a: a}
+pub fn layer_factory<F: Float + 'static>(
+    l: Layers,
+    w: Vec<Vec<F>>,
+    n: usize,
+    s: F,
+    o: F,
+    a: Option<Box<dyn Activation<F>>>,
+) -> (Vec<F>, Vec<(usize, usize)>, Box<dyn Layer<F>>) {
+    let m: usize;
+    let d = w.len();
+    assert!(d != 0);
+    m = w[0].len();
+    w.iter().for_each(|r| assert!(r.len() == m));
 
-}
-
-fn map_kernel<F: Float>(k: Vec<Vec<F>>, s: F){
-    let w = k.len();
-    let mut tmp = flatten(k);
-    let fill = tmp.len() % 4;
-    if fill != 0{
-        tmp.append(&mut vec![s; 4 - fill]);
-    }
-    unsafe{
-        let (p, _, _) = Vec::into_raw_parts(tmp);
-    
-        if init_kernel((w * w) as c_ulong, w as c_ulong,  p as *const c_double) != 0 {
-            panic!("failed to set kernel");
+    match l {
+        Layers::Linear => {
+            assert!(w.len() == n);
+            let mut l1 = Linear {
+                fill: 0,
+                d: d,
+                m: m,
+                n: n,
+                zero: s,
+                a: a.unwrap(),
+                activations: vec![s; n * m],
+            };        
+            (
+                l1.flatten_weights(w),
+                l1.generate_input_mapping(),
+                Box::new(l1)
+            )
         }
-    }
-}
-
-fn flatten<F: Float>(mut k: Vec<Vec<F>>)-> Vec<F>{
-    let shape = k.len();
-    let mut tmp = Vec::<F>::with_capacity(shape * shape);
-    for kr in k.iter_mut(){
-        if kr.len() != shape{
-            panic!("{} is out of shape (shape is {})", kr.len(), shape);
+        Layers::Conv2D =>{
+            let o = n - w.len() + 1;
+            let w1 = w.len();        
+            let mut l1 = Conv2D {
+                fill: 0,
+                i: n,
+                d: w1,
+                output_shape: o * o,
+                zero: s,
+                a: a.unwrap(),
+                activations: vec![s; o * o]
+            };        
+            (
+                l1.flatten_weights(w),
+                l1.generate_input_mapping(),
+                Box::new(l1)
+            )
         }
-        tmp.append(kr);
+        _ => todo!(),
     }
-    tmp
 }
