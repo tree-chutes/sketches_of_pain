@@ -33,7 +33,7 @@ impl<F: Float> Layer<F> for Linear<F> {
         self.m * self.n
     }
 
-    fn forward(&self, w: &[F], f: &[F], b: F) -> Vec<F> {
+    fn forward(&self, w: &[F], f: &[F], b: F) -> (Vec<F>, Vec<F>) {
         self.multiply(w, f)
     }
 }
@@ -73,8 +73,11 @@ impl<F: Float> Linear<F> {
         ret
     }
 
-    fn multiply(&self, f: &[F], w: &[F]) -> Vec<F> {
+    fn multiply(&self, f: &[F], w: &[F]) -> (Vec<F>, Vec<F>) {
+        assert!(w.len() != 0 && f.len() != 0);
+        let mut reti: usize;
         let mut ret: Vec<F>;
+        let mut transposed: Vec<F>;
         let mut sum = self.zero;
         let len = self.n * self.m;
         assert!(f.len() == len * self.d);
@@ -95,16 +98,25 @@ impl<F: Float> Linear<F> {
             {
                 panic!("failed to multiply");
             }
+            transposed = vec![self.zero; self.n * self.m];
             for i in 0..(len * self.d) {
                 if i != 0 && i % self.d == 0 {
-                    ret[i / self.d - 1] = sum;
+                    reti = i / self.d - 1;
+                    ret[reti] = sum;
+                    if reti % self.m == 0{
+                        transposed[reti / self.m] = ret[reti] 
+                    }
+                    else{
+                        transposed[reti / self.m + reti % self.m * self.d] = ret[reti];
+                    }
                     sum = self.zero;
                 }
                 sum = sum + ret[i];
             }
             ret.resize(self.n * self.m, self.zero);
             ret[len - 1] = sum;
-            ret
+            transposed[len - 1] = sum;
+            (ret, transposed)
         }
     }
 }
