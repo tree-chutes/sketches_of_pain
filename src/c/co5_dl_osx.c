@@ -1,4 +1,4 @@
-//Copyright (c) 2025, tree-chutes
+// Copyright (c) 2025, tree-chutes
 
 #include <immintrin.h>
 #include <string.h>
@@ -6,19 +6,19 @@
 const unsigned char FLOAT_REGISTER_COUNT = 8;
 const unsigned char DOUBLE_REGISTER_COUNT = 4;
 
-unsigned char matrix_multiply_double(unsigned long n, unsigned long d, unsigned long m, double* rearranged, double* dXm, double* out)
+unsigned char matrix_multiply_double(unsigned long n, unsigned long d, unsigned long m, double *rearranged, double *dXm, double *out)
 {
     __m256d operand1 = _mm256_setzero_pd();
     __m256d operand2 = _mm256_setzero_pd();
     __m256d operand3 = _mm256_setzero_pd();
-    double* tmp0 = dXm;
-    double* tmp1 = rearranged;
-    double* tmp2 = out;
+    double *tmp0 = dXm;
+    double *tmp1 = rearranged;
+    double *tmp2 = out;
     unsigned char displacement;
     unsigned long trigger = n * d;
     unsigned long n_counter = 0;
     unsigned long m_counter = 0;
-    
+
     for (unsigned int c = 0; c < d * d; c++)
     {
         operand1 = _mm256_loadu_pd(tmp0);
@@ -30,11 +30,11 @@ unsigned char matrix_multiply_double(unsigned long n, unsigned long d, unsigned 
         displacement = DOUBLE_REGISTER_COUNT;
         if (!(m_counter < m))
         {
-            
+
             displacement = m;
-            if (++n_counter < n)
+            if (n_counter++ < n)
             {
-                memset(tmp2 + displacement, 0, sizeof(double) * (DOUBLE_REGISTER_COUNT - m)); 
+                memset(tmp2 + displacement, 0, sizeof(double) * (DOUBLE_REGISTER_COUNT - m));
             }
         }
         tmp1 += displacement;
@@ -44,25 +44,23 @@ unsigned char matrix_multiply_double(unsigned long n, unsigned long d, unsigned 
             tmp0 += m;
             tmp2 = out;
         }
-
     }
     return 0;
 }
 
-unsigned char matrix_multiply_float(unsigned long n, unsigned long d, unsigned long m, float* rearranged, float* dXm, float* out)
+unsigned char matrix_multiply_float(unsigned long n, unsigned long d, unsigned long m, float *rearranged, float *dXm, float *out)
 {
     __m256 operand1 = _mm256_setzero_ps();
     __m256 operand2 = _mm256_setzero_ps();
     __m256 operand3 = _mm256_setzero_ps();
-    float* tmp0 = dXm;
-    float* tmp1 = rearranged;
-    float* tmp2 = out;
+    float *tmp0 = dXm;
+    float *tmp1 = rearranged;
+    float *tmp2 = out;
     unsigned char displacement;
-    unsigned long trigger = n * d;
     unsigned long n_counter = 0;
     unsigned long m_counter = 0;
-    
-    for (unsigned int c = 0; c < d * d; c++)
+
+    for (unsigned int c = 0; c < d * m; c++)
     {
         operand1 = _mm256_loadu_ps(tmp0);
         operand2 = _mm256_loadu_ps(tmp1);
@@ -74,11 +72,11 @@ unsigned char matrix_multiply_float(unsigned long n, unsigned long d, unsigned l
         if (!(m_counter < m))
         {
             displacement = m;
-            if (++n_counter < n)
+            if (n_counter++ < n)
             {
-                memset(tmp2 + displacement, 0, sizeof(float) * (FLOAT_REGISTER_COUNT - m)); 
+                memset(tmp2 + displacement, 0, sizeof(float) * (FLOAT_REGISTER_COUNT - m));
             }
-        }
+    }
         tmp1 += displacement;
         tmp2 += displacement;
         if (n_counter == n)
