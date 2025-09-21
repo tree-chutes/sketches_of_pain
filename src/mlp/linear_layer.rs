@@ -78,48 +78,42 @@ impl<F: Float> Layer<F> for LinearLayer<F> {
 
 impl<F: Float> LinearLayer<F> {
 
-    fn transpose(&self, m: &mut [F], trigger: usize) {
+    fn transpose(&self, m: &mut [F], n: usize, d: usize) {
         let mut tmp: F;
         let mut idx0: usize;
+        let mut j: usize;
+        let mut i: usize;
+        let mut idx: usize = 1;
+        let mut idx1: usize = 1;
 
-        for idx in 0..trigger {
-            if idx % trigger == 0 {
-                idx0 = idx / trigger;
-            } else {
-                idx0 = idx / trigger + idx % trigger * self.d;
+        for c in 1..m.len() - 1 {
+            j = idx / d;
+            i = idx % d;
+            idx0 = i * n + j % n;
+            tmp = m[idx0];
+            if c != 1{
+                m[idx0] = m[idx1];
+                m[idx1] = tmp;                    
             }
-            tmp = m[idx];
-            m[idx] = m[idx0];
-            m[idx0] = tmp;
-        }
-    }
-
-    pub(super) fn generate_input_mapping(&self) -> Vec<(usize, usize)> {
-        let fill: usize;
-        let mut ret = Vec::<(usize, usize)>::with_capacity(self.n * self.m);
-
-        for i in 0..self.n {
-            for _ in 0..self.m {
-                for j in 0..self.d {
-                    ret.push((j, i));
-                }
+            else {
+                m[idx0] = m[idx];
+                idx1 = idx; 
             }
+            m[idx1] = tmp;                    
+            idx = idx0;
         }
-        fill = ret.len() % 4;
-        if fill != 0 {
-            ret.append(&mut vec![(0, 0); 4 - fill]);
-        }
-        ret
     }
 
     fn matrix_multiplication(&self, x: &mut [F], w: &[F]) -> (Vec<F>, F) {
         let ret = vec![self.zero; self.n * self.m];
         let mut rearranged = Vec::<F>::new();
 
-        self.transpose(x, self.n);
+        self.transpose(x, self.n, self.d);
+
         for i in 0..(self.n * self.d){
             rearranged.resize((1 + i) * self.m, x[i]);
         }
+
         unsafe {
             if size_of::<F>() == 8{
                 matrix_multiply_double(
