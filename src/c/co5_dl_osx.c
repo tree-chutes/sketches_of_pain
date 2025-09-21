@@ -19,7 +19,7 @@ unsigned char matrix_multiply_double(unsigned long n, unsigned long d, unsigned 
     unsigned long n_counter = 0;
     unsigned long m_counter = 0;
 
-    for (unsigned int c = 0; c < d * d; c++)
+    for (unsigned int c = 0; c < d * m; c++)
     {
         operand1 = _mm256_loadu_pd(tmp0);
         operand2 = _mm256_loadu_pd(tmp1);
