@@ -28,8 +28,8 @@ unsigned char linear_double(unsigned long n, unsigned long d, unsigned long m, u
         operand3 = _mm256_fmadd_pd(operand1, operand2, operand3);
         if (add_biases)
         {
-            operand1 = _mm256_loadu_ps(tmp3);
-            operand3 = _mm256_add_ps(operand1, operand3);
+            operand1 = _mm256_loadu_pd(tmp3);
+            operand3 = _mm256_add_pd(operand1, operand3);
         }
         _mm256_storeu_pd(tmp2, operand3);
         m_counter += DOUBLE_REGISTER_COUNT;
@@ -202,6 +202,35 @@ unsigned char scalar_X_matrix_double(unsigned long count, double *m_inout, doubl
         operand1 = _mm256_mul_pd(operand1, operand2);
         _mm256_storeu_pd(tmp0, operand1);
         tmp0 += DOUBLE_REGISTER_COUNT;
+    }
+    return 0;
+}
+
+unsigned char derivative_linear_float(unsigned long n, unsigned long d, unsigned long m, unsigned char add_biases, float *rearranged, float *dXm, float *b, float *out)
+{    
+    __m256d operand1 = _mm256_setzero_ps();
+    __m256d operand2 = _mm256_setzero_ps();
+    __m256d operand3 = _mm256_setzero_ps();
+    float *tmp0 = rearranged;
+    float *tmp1 = dXm;
+    float *tmp2 = out;
+    float *tmp3 = b;
+
+    for (unsigned int c = 0; c < n * m; c++)
+    {
+        operand1 = _mm256_loadu_ps(tmp0);
+        operand2 = _mm256_loadu_ps(tmp1);
+        operand3 = _mm256_loadu_ps(tmp2);
+        operand3 = _mm256_fmadd_ps(operand1, operand2, operand3);
+        _mm256_storeu_ps(tmp2, operand3);
+        tmp0 += m;
+        tmp1 += m;
+        if ( (c + 1) % m == 0)
+        {
+            tmp2 += m;
+            memset(tmp2, 0, sizeof(float) * n * (m - (c + 1) % m));
+            tmp1 = dXm;
+        }
     }
     return 0;
 }
