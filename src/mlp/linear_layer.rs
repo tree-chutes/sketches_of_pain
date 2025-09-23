@@ -8,7 +8,7 @@ use std::ffi::{c_double, c_uchar, c_ulong, c_float};
 #[link(name = "co5_dl_c", kind = "static")]
 #[allow(improper_ctypes)]
 unsafe extern "C" {
-    fn matrix_multiply_double(
+    fn linear_double(
         n: c_ulong,
         d: c_ulong,
         m: c_ulong,
@@ -18,7 +18,7 @@ unsafe extern "C" {
         out: *const c_double,
     );
 
-    fn matrix_multiply_float(
+    fn linear_float(
         n: c_ulong,
         d: c_ulong,
         m: c_ulong,
@@ -51,16 +51,23 @@ impl<F: Float> Layer<F> for LinearLayer<F> {
         let mut b1 = Vec::<F>::new();
         let mut check = x[0].len();
 
-        self.n = x.len();
-        self.d = x[0].len();
-        self.m = w[0].len();
+        if self.d == 0{
+            self.n = x.len();
+            self.d = x[0].len();
+            self.m = w[0].len();
+        }
+        else{
+            assert!(self.n == x.len());
+            assert!(self.d == x[0].len());
+            assert!(self.m == w[0].len());
+        }
         for idx in 0..x.len() {
             if x[idx].len() != check {
                 panic!("X out of shape: {}", idx)
             }
             x1.append(&mut x[idx]);
         }
-        x1.resize(x1.len() + x1.len() % (256 / (size_of::<F>() * 8) )  , self.zero);
+        x1.resize(x1.len() + (256 / (size_of::<F>() * 8)) - x1.len() % (256 / (size_of::<F>() * 8)), self.zero);
         check = w[0].len();
         for idx in 0..w.len() {
             if w[idx].len() != check {
@@ -68,7 +75,7 @@ impl<F: Float> Layer<F> for LinearLayer<F> {
             }
             w1.append(&mut w[idx]);
         }
-        w1.resize(w1.len() + w1.len() % (256 / (size_of::<F>() * 8) )  , self.zero);
+        w1.resize(w1.len()  + (256 / (size_of::<F>() * 8)) - w1.len() % (256 / (size_of::<F>() * 8)), self.zero);
         for idx in 0..b.len() {
             if b[idx].len() != check {
                 panic!("W out of shape: {}", idx)
@@ -76,28 +83,23 @@ impl<F: Float> Layer<F> for LinearLayer<F> {
             b1.append(&mut b[idx]);
         }
         //TODO: make 256 a constant
-        b1.resize(b1.len() + b1.len() % (256 / (size_of::<F>() * 8) )  , self.zero);
+        b1.resize(b1.len() + (256 / (size_of::<F>() * 8)) - b1.len() % (256 / (size_of::<F>() * 8)), self.zero);
 
         (x1, w1, b1)
     }
 
-    fn forward(&self, d: &mut (Vec<F>, Vec<F>, Vec<F>), a: Option<Box<dyn Aggregator<F>>>) -> (Vec<F>, F) {
-        let mut data_len: usize = self.n * self.d + self.n * self.d % 4;
-        let mut weights_len: usize = self.d * self.m + self.d * self.m % 4;
-        let mut biases_len: usize = self.n * self.m + self.n * self.m % 4;
+    fn forward(&self, mut d: (&mut [F], &[F], &[F]), _a: Option<Box<dyn Aggregator<F>>>) -> Vec<F> {
+        let data_len: usize = self.n * self.d  + (256 / (size_of::<F>() * 8)) - self.n * self.d % (256 / (size_of::<F>() * 8));
+        let weights_len: usize = self.d * self.m + (256 / (size_of::<F>() * 8)) - self.d * self.m % (256 / (size_of::<F>() * 8));
+        let biases_len: usize = self.n * self.m  + (256 / (size_of::<F>() * 8)) - self.n * self.m % (256 / (size_of::<F>() * 8));
 
-        if size_of::<F>() == 4 {
-            data_len = self.n * self.d + self.n * self.d % 8;
-            weights_len  = self.d * self.m + self.d * self.m % 8;
-            biases_len = self.n * self.m + self.n * self.m % 8;
-        }
         assert!(d.0.len() == data_len);
         assert!(d.1.len() == weights_len);
         assert!(d.2.len() == biases_len);
         self.execute(&mut d.0, &d.1, &d.2)
     }
 
-    fn backward(&self, x: &[F], w: &[F], b: &[F]) -> Vec<F> {
+    fn backward(&self, d: (&mut [F], &[F], &[F]), z: &[F]) -> Vec<F> {
         todo![]
     }
 }
@@ -130,8 +132,8 @@ impl<F: Float> LinearLayer<F> {
         }
     }
 
-    fn execute(&self, x: &mut [F], w: &[F], b: &[F]) -> (Vec<F>, F) {
-        let ret = vec![self.zero; self.n * self.m];
+    fn execute(&self, x: &mut [F], w: &[F], b: &[F]) -> Vec<F> {
+        let mut ret = vec![self.zero; self.n * self.m];
         let mut rearranged = Vec::<F>::new();
 
         self.transpose(x, self.n, self.d);
@@ -142,7 +144,7 @@ impl<F: Float> LinearLayer<F> {
 
         unsafe {
             if size_of::<F>() == 8{
-                matrix_multiply_double(
+                linear_double(
                     self.n as c_ulong,
                     self.d as c_ulong,
                     self.m as c_ulong,
@@ -153,7 +155,7 @@ impl<F: Float> LinearLayer<F> {
                 );
             }
             else{
-                matrix_multiply_float(
+                linear_float(
                     self.n as c_ulong,
                     self.d as c_ulong,
                     self.m as c_ulong,
@@ -164,6 +166,10 @@ impl<F: Float> LinearLayer<F> {
                 );
             }
         }
-        (ret, self.zero)
+        ret.resize(
+            ret.len() +  (256 / (size_of::<F>() * 8)) - ret.len() % (256 / (size_of::<F>() * 8)),
+            self.zero
+        );
+        ret
     }
 }
