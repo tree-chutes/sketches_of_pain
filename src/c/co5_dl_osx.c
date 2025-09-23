@@ -6,7 +6,7 @@
 const unsigned char FLOAT_REGISTER_COUNT = 8;
 const unsigned char DOUBLE_REGISTER_COUNT = 4;
 
-unsigned char matrix_multiply_double(unsigned long n, unsigned long d, unsigned long m, double *rearranged, double *dXm, double *b, double *out)
+unsigned char linear_double(unsigned long n, unsigned long d, unsigned long m, double *rearranged, double *dXm, double *b, double *out)
 {
     __m256d operand1 = _mm256_setzero_pd();
     __m256d operand2 = _mm256_setzero_pd();
@@ -63,7 +63,7 @@ unsigned char matrix_multiply_double(unsigned long n, unsigned long d, unsigned 
     return 0;
 }
 
-unsigned char matrix_multiply_float(unsigned long n, unsigned long d, unsigned long m, float *rearranged, float *dXm, float *b, float *out)
+unsigned char linear_float(unsigned long n, unsigned long d, unsigned long m, float *rearranged, float *dXm, float *b, float *out)
 {
     __m256 operand1 = _mm256_setzero_ps();
     __m256 operand2 = _mm256_setzero_ps();
@@ -115,6 +115,28 @@ unsigned char matrix_multiply_float(unsigned long n, unsigned long d, unsigned l
             tmp0 += m;
             tmp2 = out;
         }
+    }
+    return 0;
+}
+
+unsigned char squared_loss_float(unsigned long count, float *p_inout, float *t)
+{
+    __m256 operand1 = _mm256_setzero_ps();
+    __m256 operand2 = _mm256_setzero_ps();
+    __m256 operand3 = _mm256_setzero_ps();
+
+    float *tmp0 = p_inout;
+    float *tmp1 = t;
+
+    for (unsigned long c = 0; c < count; c += FLOAT_REGISTER_COUNT)
+    {
+        operand1 = _mm256_loadu_ps(tmp0);
+        operand2 = _mm256_loadu_ps(tmp1);
+        operand3 = _mm256_sub_ps(operand1, operand2);
+        operand3 = _mm256_mul_ps(operand3, operand3);
+        _mm256_storeu_ps(tmp0, operand3);
+        tmp0 += FLOAT_REGISTER_COUNT;
+        tmp1 += FLOAT_REGISTER_COUNT;        
     }
     return 0;
 }
