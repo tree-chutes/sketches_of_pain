@@ -206,15 +206,19 @@ unsigned char scalar_X_matrix_double(unsigned long count, double *m_inout, doubl
     return 0;
 }
 
-unsigned char derivative_linear_float(unsigned long n, unsigned long d, unsigned long m, unsigned char add_biases, float *rearranged, float *dXm, float *b, float *out)
+unsigned char derivative_linear_float(unsigned long n, unsigned long d, unsigned long m, float *learning_rate, float *nXd, float *dXm, float *previous, float *working_vec)
 {    
     __m256d operand1 = _mm256_setzero_ps();
     __m256d operand2 = _mm256_setzero_ps();
     __m256d operand3 = _mm256_setzero_ps();
-    float *tmp0 = rearranged;
+    __m256d operand4 = _mm256_setzero_ps();
+
+    float *tmp0 = nXd;
     float *tmp1 = dXm;
-    float *tmp2 = out;
-    float *tmp3 = b;
+    float *tmp2 = working_vec;
+    float *tmp3 = previous;
+    operand4 = _mm256_loadu_ps(learning_rate);
+
 
     for (unsigned int c = 0; c < n * m; c++)
     {
@@ -222,14 +226,22 @@ unsigned char derivative_linear_float(unsigned long n, unsigned long d, unsigned
         operand2 = _mm256_loadu_ps(tmp1);
         operand3 = _mm256_loadu_ps(tmp2);
         operand3 = _mm256_fmadd_ps(operand1, operand2, operand3);
-        _mm256_storeu_ps(tmp2, operand3);
         tmp0 += m;
         tmp1 += m;
         if ( (c + 1) % m == 0)
         {
+            operand1 = _mm256_loadu_ps(tmp3);
+            operand2 = _mm256_mul_ps(operand4, operand3);
+            operand1 = _mm256_sub_ps(operand1, operand2);
+            _mm256_storeu_ps(tmp2, operand1);
             tmp2 += m;
+            tmp3 += m;
             memset(tmp2, 0, sizeof(float) * n * (m - (c + 1) % m));
             tmp1 = dXm;
+        }
+        else
+        {
+            _mm256_storeu_ps(tmp2, operand3);
         }
     }
     return 0;
