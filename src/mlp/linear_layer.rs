@@ -9,12 +9,11 @@ use std::ffi::{c_double, c_float, c_uchar, c_ulong};
 #[link(name = "co5_dl_c", kind = "static")]
 #[allow(improper_ctypes)]
 unsafe extern "C" {
-    fn linear_double(
+    fn dot_product_double(
         n: c_ulong,
         d: c_ulong,
         m: c_ulong,
-        a_b: c_uchar,
-        rearranged: *const c_double,
+        nXd: *const c_double,
         dXm: *const c_double,
         b: *const c_double,
         out: *const c_double
@@ -29,6 +28,18 @@ unsafe extern "C" {
         b: *const c_float,
         out: *const c_float
     );
+
+    fn differentiate_double(
+        n: c_ulong,
+        d: c_ulong,
+        m: c_ulong,
+        l_r: *const c_double,
+        nXd: *const c_double,
+        dXm: *const c_double,
+        p: *const c_double,
+        out: *const c_double
+    ) -> c_uchar;
+
     fn differentiate_float(
         n: c_ulong,
         d: c_ulong,
@@ -103,7 +114,7 @@ impl<F: Float> Layer<F> for LinearLayer<F> {
             }
             b1.append(&mut b[idx]);
         }
-        //TODO: make REGISTER_WIDTHa constant
+
         b1.resize(
             b1.len() + (REGISTER_WIDTH / (size_of::<F>() * 8)) - b1.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
             self.zero,
@@ -151,11 +162,14 @@ impl<F: Float> LinearLayer<F> {
         let mut idx0: usize;
         let mut transposed: Vec<F> = vec![self.zero; n * d];
 
-        for c in 1..(n * d - 1) {
+        for c in 0..(n * d) {
             // i = c % d;
             // j = c / d;
             idx0 = (c % d) * n + (c / d);
             transposed[idx0] =  m[c];
+        }
+        for i in 0..n * d{
+            m[i] = transposed[i];
         }
     }
 
@@ -166,11 +180,10 @@ impl<F: Float> LinearLayer<F> {
 
         unsafe {
             if size_of::<F>() == 8 {
-                linear_double(
+                dot_product_double(
                     self.n as c_ulong,
                     self.d as c_ulong,
                     self.m as c_ulong,
-                    1 as c_uchar,
                     x.as_ptr() as *const c_double,
                     w.as_ptr() as *const c_double,
                     b.as_ptr() as *const c_double,
@@ -214,8 +227,22 @@ impl<F: Float> LinearLayer<F> {
                     w.as_ptr() as *const c_float,
                     ret_w.as_ptr() as *const c_float,
                 );
-                self.transpose(x, self.d, self.n);
-                self.transpose(w, self.d, self.m);
+            }
+            else{
+                differentiate_double(
+                    self.d as c_ulong,
+                    self.m as c_ulong,
+                    self.n as c_ulong,
+                    learning_rate.as_ptr() as *const c_double,
+                    x.as_ptr() as *const c_double,
+                    z.as_ptr() as *const c_double,                                         
+                    w.as_ptr() as *const c_double,
+                    ret_w.as_ptr() as *const c_double,
+                );                
+            }
+            self.transpose(x, self.d, self.n);
+            self.transpose(w, self.d, self.m);
+            if size_of::<F>() == 4 {
                 differentiate_float(
                     self.d as c_ulong,
                     self.m as c_ulong,
@@ -225,6 +252,18 @@ impl<F: Float> LinearLayer<F> {
                     w.as_ptr() as *const c_float,                                         
                     x.as_ptr() as *const c_float,
                     ret_x.as_ptr() as *const c_float,
+                );        
+            }
+            else{
+                differentiate_double(
+                    self.d as c_ulong,
+                    self.m as c_ulong,
+                    self.n as c_ulong,
+                    learning_rate.as_ptr() as *const c_double,
+                    z.as_ptr() as *const c_double,
+                    w.as_ptr() as *const c_double,                                         
+                    x.as_ptr() as *const c_double,
+                    ret_x.as_ptr() as *const c_double,
                 );        
             }
         }
