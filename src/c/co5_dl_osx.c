@@ -3,125 +3,104 @@
 #include <immintrin.h>
 #include <string.h>
 
-const unsigned char FLOAT_REGISTER_COUNT = 8;
-const unsigned char DOUBLE_REGISTER_COUNT = 4;
+const unsigned char FLOAT_REGISTER_COUNT = 16;
 
-unsigned char linear_double(unsigned long n, unsigned long d, unsigned long m, unsigned char add_biases, double *multiplier, double *dXm, double *b, double *out)
+unsigned char dot_product_float(unsigned long n, unsigned long d, unsigned long m, float *nXd, float *dXm, float *b, float *out)
 {
-    __m256d operand1 = _mm256_setzero_pd();
-    __m256d operand2 = _mm256_setzero_pd();
-    __m256d operand3 = _mm256_setzero_pd();
-    double *tmp0 = dXm;
-    double *tmp1 = multiplier;
-    double *tmp2 = out;
-    double *tmp3 = b;
-    unsigned char displacement;
-    unsigned long trigger = n * d;
-    unsigned long n_counter = 0;
-    unsigned long m_counter = 0;
+    float *working = malloc(sizeof(float) * FLOAT_REGISTER_COUNT);    
+    __m512 operand1 = _mm512_setzero_ps();
+    __m512 operand2 = _mm512_setzero_ps();
+    __m512 operand3 = _mm512_setzero_ps();
+    float *tmp0 = nXd;
+    float *tmp1 = dXm;
+    float *tmp2 = working;
 
-    for (unsigned int c = 0; c < d * m; c++)
+    for (unsigned long c = 0; c < n * m; c++)
     {
-        operand1 = _mm256_loadu_pd(tmp0);
-        operand2 = _mm256_loadu_pd(tmp1);
-        operand3 = _mm256_loadu_pd(tmp2);
-        operand3 = _mm256_fmadd_pd(operand1, operand2, operand3);
-        if (add_biases)
+        memset(working, 0, sizeof(float) * FLOAT_REGISTER_COUNT);
+        operand1 = _mm512_loadu_ps(tmp0);
+        operand2 = _mm512_loadu_ps(tmp1);
+        operand3 = _mm512_loadu_ps(tmp2);
+        operand3 = _mm512_fmadd_ps(operand1, operand2, operand3);
+        _mm512_storeu_ps(tmp2, operand3);
+        memset(tmp2 + d, 0, sizeof(float) * (FLOAT_REGISTER_COUNT - d));
+        operand3 = _mm512_loadu_ps(tmp2);
+        out[c] = _mm512_reduce_add_ps(operand3);
+        out[c] += b[c];
+        tmp1 += d;
+        if ((c + 1) % m == 0)
         {
-            operand1 = _mm256_loadu_pd(tmp3);
-            operand3 = _mm256_add_pd(operand1, operand3);
-        }
-        _mm256_storeu_pd(tmp2, operand3);
-        m_counter += DOUBLE_REGISTER_COUNT;
-        displacement = DOUBLE_REGISTER_COUNT;
-        if (!(m_counter < m))
-        {
-            displacement = m;
-            if (n_counter++ < n)
-            {
-                memset(tmp2 + displacement, 0, sizeof(double) * (DOUBLE_REGISTER_COUNT - m));
-            }
-            else
-            {
-                add_biases = 0;
-            }
-        }
-        tmp1 += displacement;
-        tmp2 += displacement;
-        if (add_biases)
-        {
-            tmp3 += displacement;
-        }
-
-        if (n_counter == n)
-        {
-            tmp0 += m;
-            tmp2 = out;
+            tmp0 += d;
+            tmp1 = dXm;
         }
     }
+    free(working);
     return 0;
 }
 
-unsigned char linear_float(unsigned long n, unsigned long d, unsigned long m, unsigned char add_biases, float *multiplier, float *dXm, float *b, float *out)
+unsigned char differentiate_float(unsigned long n, unsigned long d, unsigned long m, float *learning_rate, float *nXd, float *dXm, float *previous, float *out)
 {
-    __m256 operand1 = _mm256_setzero_ps();
-    __m256 operand2 = _mm256_setzero_ps();
-    __m256 operand3 = _mm256_setzero_ps();
-    float *tmp0 = dXm;
-    float *tmp1 = multiplier;
-    float *tmp2 = out;
-    float *tmp3 = b;
+    unsigned long offset;
+    float *working = malloc(sizeof(float) * FLOAT_REGISTER_COUNT);    
+    __m512 operand1 = _mm512_setzero_ps();
+    __m512 operand2 = _mm512_setzero_ps();
+    __m512 operand3 = _mm512_setzero_ps();
+    float *tmp0 = nXd;
+    float *tmp1 = dXm;
+    float *tmp2 = working;
 
-    unsigned char displacement;
-    unsigned long n_counter = 0;
-    unsigned long m_counter = 0;
-
-    for (unsigned int c = 0; c < d * m; c++)
+    for (unsigned long c = 0; c < n * m; c++)
     {
-        operand1 = _mm256_loadu_ps(tmp0);
-        operand2 = _mm256_loadu_ps(tmp1);
-        operand3 = _mm256_loadu_ps(tmp2);
-        operand3 = _mm256_fmadd_ps(operand1, operand2, operand3);
-        if (add_biases)
+        memset(working, 0, sizeof(float) * FLOAT_REGISTER_COUNT);
+        operand1 = _mm512_loadu_ps(tmp0);
+        operand2 = _mm512_loadu_ps(tmp1);
+        operand3 = _mm512_loadu_ps(tmp2);
+        operand3 = _mm512_fmadd_ps(operand1, operand2, operand3);
+        _mm512_storeu_ps(tmp2, operand3);
+        memset(tmp2 + d, 0, sizeof(float) * (FLOAT_REGISTER_COUNT - d));
+        operand3 = _mm512_loadu_ps(tmp2);
+        out[c] = _mm512_reduce_add_ps(operand3);
+        tmp1 += d;
+        if ((c + 1) % m == 0)
         {
-            operand1 = _mm256_loadu_ps(tmp3);
-            operand3 = _mm256_add_ps(operand1, operand3);
+            offset = ((c + 1) / m  - 1) * m;
+            operand1 = _mm512_loadu_ps(out + offset);
+            operand2 = _mm512_loadu_ps(learning_rate + offset);
+            operand3 = _mm512_loadu_ps(previous + offset);
+            operand2 = _mm512_mul_ps(operand1, operand2);
+            operand3 = _mm512_sub_ps(operand3, operand2);
+            _mm512_storeu_ps(out + offset, operand3);
+            tmp0 += d;
+            tmp1 = dXm;
         }
-        _mm256_storeu_ps(tmp2, operand3);
-        m_counter += FLOAT_REGISTER_COUNT;
-        displacement = FLOAT_REGISTER_COUNT;
-        if (!(m_counter < m))
-        {
-            displacement = m;
-            if (n_counter++ < n)
-            {
-                memset(tmp2 + displacement, 0, sizeof(float) * (FLOAT_REGISTER_COUNT - m));
-            }
-            else
-            {
-                add_biases = 0;
-            }
-        }
-        tmp1 += displacement;
-        tmp2 += displacement;
-        if (add_biases)
-        {
-            tmp3 += displacement;
-        }
-        if (n_counter == n)
-        {
-            tmp0 += m;
-            tmp2 = out;
-        }
+    }
+    free(working);
+    return 0;
+}
+
+unsigned char scalar_X_matrix_float(unsigned long count, float *m_inout, float *s)
+{
+    __m512 operand1 = _mm512_setzero_ps();
+    __m512 operand2 = _mm512_setzero_ps();
+
+    float *tmp0 = m_inout;
+    operand2 = _mm512_loadu_ps(s);
+
+    for (unsigned long c = 0; c < count; c += FLOAT_REGISTER_COUNT)
+    {
+        operand1 = _mm512_loadu_ps(tmp0);
+        operand1 = _mm512_mul_ps(operand1, operand2);
+        _mm512_storeu_ps(tmp0, operand1);
+        tmp0 += FLOAT_REGISTER_COUNT;
     }
     return 0;
 }
 
 unsigned char squared_loss_float(unsigned long count, float *p_inout, float *t, float *out)
 {
-    __m256 operand1 = _mm256_setzero_ps();
-    __m256 operand2 = _mm256_setzero_ps();
-    __m256 operand3 = _mm256_setzero_ps();
+    __m512 operand1 = _mm512_setzero_ps();
+    __m512 operand2 = _mm512_setzero_ps();
+    __m512 operand3 = _mm512_setzero_ps();
 
     float *tmp0 = p_inout;
     float *tmp1 = t;
@@ -129,120 +108,17 @@ unsigned char squared_loss_float(unsigned long count, float *p_inout, float *t, 
 
     for (unsigned long c = 0; c < count; c += FLOAT_REGISTER_COUNT)
     {
-        operand1 = _mm256_loadu_ps(tmp0);
-        operand2 = _mm256_loadu_ps(tmp1);
-        operand3 = _mm256_sub_ps(operand1, operand2);
-        _mm256_storeu_ps(tmp0, operand3);
-        operand1 = _mm256_loadu_ps(tmp0);
-        _mm256_storeu_ps(tmp0, operand3);
-        operand3 = _mm256_mul_ps(operand3, operand3);
-        _mm256_storeu_ps(tmp2, operand3);
+        operand1 = _mm512_loadu_ps(tmp0);
+        operand2 = _mm512_loadu_ps(tmp1);
+        operand3 = _mm512_sub_ps(operand1, operand2);
+        _mm512_storeu_ps(tmp0, operand3);
+        operand1 = _mm512_loadu_ps(tmp0);
+        _mm512_storeu_ps(tmp0, operand3);
+        operand3 = _mm512_mul_ps(operand3, operand3);
+        _mm512_storeu_ps(tmp2, operand3);
         tmp0 += FLOAT_REGISTER_COUNT;
         tmp1 += FLOAT_REGISTER_COUNT;
         tmp2 += FLOAT_REGISTER_COUNT;
-    }
-    return 0;
-}
-
-unsigned char squared_loss_double(unsigned long count, double *p_inout, double *t, double *out)
-{
-    __m256 operand1 = _mm256_setzero_pd();
-    __m256 operand2 = _mm256_setzero_pd();
-    __m256 operand3 = _mm256_setzero_pd();
-
-    float *tmp0 = p_inout;
-    float *tmp1 = t;
-    float *tmp2 = out;
-
-    for (unsigned long c = 0; c < count; c += DOUBLE_REGISTER_COUNT)
-    {
-        operand1 = _mm256_loadu_pd(tmp0);
-        operand2 = _mm256_loadu_pd(tmp1);
-        operand3 = _mm256_sub_pd(operand1, operand2); // p - t
-        _mm256_storeu_pd(tmp0, operand3);             // p - t
-        operand1 = _mm256_loadu_pd(tmp0);
-        operand3 = _mm256_mul_pd(operand3, operand3); // pow 2
-        _mm256_storeu_pd(tmp2, operand3);
-        tmp0 += FLOAT_REGISTER_COUNT;
-        tmp1 += FLOAT_REGISTER_COUNT;
-        tmp2 += FLOAT_REGISTER_COUNT;
-    }
-    return 0;
-}
-
-unsigned char scalar_X_matrix_float(unsigned long count, float *m_inout, float *s)
-{
-    __m256 operand1 = _mm256_setzero_ps();
-    __m256 operand2 = _mm256_setzero_ps();
-
-    float *tmp0 = m_inout;
-    operand2 = _mm256_loadu_ps(s);
-
-    for (unsigned long c = 0; c < count; c += FLOAT_REGISTER_COUNT)
-    {
-        operand1 = _mm256_loadu_ps(tmp0);
-        operand1 = _mm256_mul_ps(operand1, operand2);
-        _mm256_storeu_ps(tmp0, operand1);
-        tmp0 += FLOAT_REGISTER_COUNT;
-    }
-    return 0;
-}
-
-unsigned char scalar_X_matrix_double(unsigned long count, double *m_inout, double *s)
-{
-    __m256 operand1 = _mm256_setzero_pd();
-    __m256 operand2 = _mm256_setzero_pd();
-
-    double *tmp0 = m_inout;
-    operand2 = _mm256_loadu_pd(s);
-
-    for (unsigned long c = 0; c < count; c += DOUBLE_REGISTER_COUNT)
-    {
-        operand1 = _mm256_loadu_pd(tmp0);
-        operand1 = _mm256_mul_pd(operand1, operand2);
-        _mm256_storeu_pd(tmp0, operand1);
-        tmp0 += DOUBLE_REGISTER_COUNT;
-    }
-    return 0;
-}
-
-unsigned char derivative_linear_float(unsigned long n, unsigned long d, unsigned long m, float *learning_rate, float *nXd, float *dXm, float *previous, float *working_vec)
-{    
-    __m256d operand1 = _mm256_setzero_ps();
-    __m256d operand2 = _mm256_setzero_ps();
-    __m256d operand3 = _mm256_setzero_ps();
-    __m256d operand4 = _mm256_setzero_ps();
-
-    float *tmp0 = nXd;
-    float *tmp1 = dXm;
-    float *tmp2 = working_vec;
-    float *tmp3 = previous;
-    operand4 = _mm256_loadu_ps(learning_rate);
-
-
-    for (unsigned int c = 0; c < n * m; c++)
-    {
-        operand1 = _mm256_loadu_ps(tmp0);
-        operand2 = _mm256_loadu_ps(tmp1);
-        operand3 = _mm256_loadu_ps(tmp2);
-        operand3 = _mm256_fmadd_ps(operand1, operand2, operand3);
-        tmp0 += m;
-        tmp1 += m;
-        if ( (c + 1) % m == 0)
-        {
-            operand1 = _mm256_loadu_ps(tmp3);
-            operand2 = _mm256_mul_ps(operand4, operand3);
-            operand1 = _mm256_sub_ps(operand1, operand2);
-            _mm256_storeu_ps(tmp2, operand1);
-            tmp2 += m;
-            tmp3 += m;
-            memset(tmp2, 0, sizeof(float) * n * (m - (c + 1) % m));
-            tmp1 = dXm;
-        }
-        else
-        {
-            _mm256_storeu_ps(tmp2, operand3);
-        }
     }
     return 0;
 }
