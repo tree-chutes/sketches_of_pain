@@ -4,7 +4,7 @@ use super::register::REGISTER_WIDTH;
 use super::layers::Layer;
 use super::{activation_functions::Activation, aggregator_functions::Aggregator};
 use num_traits::Float;
-use std::ffi::{c_double, c_float, c_uchar, c_ulong};
+use std::{ptr,ffi::{c_double, c_float, c_uchar, c_ulong}};
 
 #[link(name = "co5_dl_c", kind = "static")]
 #[allow(improper_ctypes)]
@@ -114,7 +114,6 @@ impl<F: Float> Layer<F> for LinearLayer<F> {
             }
             b1.append(&mut b[idx]);
         }
-
         b1.resize(
             b1.len() + (REGISTER_WIDTH / (size_of::<F>() * 8)) - b1.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
             self.zero,
@@ -159,17 +158,18 @@ impl<F: Float> Layer<F> for LinearLayer<F> {
 
 impl<F: Float> LinearLayer<F> {
     fn transpose(&self, m: &mut [F], n: usize, d: usize) {
+        let len = n * d;
         let mut idx0: usize;
         let mut transposed: Vec<F> = vec![self.zero; n * d];
 
-        for c in 0..(n * d) {
+        for c in 0..len {
             // i = c % d;
             // j = c / d;
             idx0 = (c % d) * n + (c / d);
             transposed[idx0] =  m[c];
         }
-        for i in 0..n * d{
-            m[i] = transposed[i];
+        unsafe{
+            ptr::copy_nonoverlapping(transposed.as_ptr(), m.as_mut_ptr(), len);
         }
     }
 
@@ -267,6 +267,6 @@ impl<F: Float> LinearLayer<F> {
                 );        
             }
         }
-        (ret_x, ret_w, b.to_vec())
+        (ret_x, ret_w, z.to_vec())
     }
 }
