@@ -160,7 +160,7 @@ impl<F: Float> LinearLayer<F> {
     fn transpose(&self, m: &mut [F], n: usize, d: usize) {
         let len = n * d;
         let mut idx0: usize;
-        let mut transposed: Vec<F> = vec![self.zero; n * d];
+        let mut transposed: Vec<F> = vec![self.zero; len];
 
         for c in 0..len {
             // i = c % d;
