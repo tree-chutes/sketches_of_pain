@@ -95,7 +95,7 @@ unsigned char dot_product_double(unsigned long n, unsigned long d, unsigned long
     return 0;
 }
 
-unsigned char differentiate_double(unsigned long n, unsigned long d, unsigned long m, double *learning_rate, double *nXd, double *dXm, double *previous, double *out)
+unsigned char sgd_double(unsigned long n, unsigned long d, unsigned long m, double *learning_rate, double *nXd, double *dXm, double *previous, double *out)
 {
     unsigned long idx = 0;
     unsigned long offset;
@@ -121,7 +121,7 @@ unsigned char differentiate_double(unsigned long n, unsigned long d, unsigned lo
         {
             register_reset_counter--;
         }
-        memset(working, 0, sizeof(double) * DOUBLE_REGISTER_COUNT);
+        memset(working, 0, sizeof(double) * DOUBLE_REGISTER_COUNT);        
         operand1 = _mm512_loadu_pd(NxD);
         operand2 = _mm512_loadu_pd(DxM);
         operand3 = _mm512_loadu_pd(working);
@@ -142,7 +142,8 @@ unsigned char differentiate_double(unsigned long n, unsigned long d, unsigned lo
         }
         operand3 = _mm512_loadu_pd(working);
         out[idx] += _mm512_reduce_add_pd(operand3);
-        if ((idx + 1) % m == 0)
+        // OR takes care of D > DOUBLE_REGISTER_COUNT  
+        if ((idx + 1) % m == 0 && d < DOUBLE_REGISTER_COUNT || (idx + 1) % m == 0 && register_reset_counter == 0)
         {
             offset = ((idx + 1) / m  - 1) * m;
             operand1 = _mm512_loadu_pd(out + offset);
@@ -151,7 +152,7 @@ unsigned char differentiate_double(unsigned long n, unsigned long d, unsigned lo
             operand2 = _mm512_mul_pd(operand1, operand2);
             operand3 = _mm512_sub_pd(operand3, operand2);
             _mm512_storeu_pd(out + offset, operand3);
-            // CLEARS fill from out buffer for carrying over purposes. Otherwise out buffer contains
+            // CLEARS fill from out buffer for carrying over purposes. Otherwise working buffer contains
             // garbage values for the following idx
             if (d < DOUBLE_REGISTER_COUNT)
             {
@@ -199,7 +200,6 @@ unsigned char differentiate_double(unsigned long n, unsigned long d, unsigned lo
     free(working);
     return 0;
 }
-
 
 unsigned char squared_loss_double(unsigned long count, double *p_inout, double *t, double *out)
 {
