@@ -68,9 +68,9 @@ impl<F: Float> Layer<F> for LinearLayer<F> {
     ) -> (Vec<F>, Vec<F>, Vec<F>) {
         assert!(x.len() != 0);
         assert!(x[0].len() != 0);
-        assert!(w.len() != 0);
-        assert!(w[0].len() != 0);
-        assert!(x[0].len() == w.len());
+        assert!(w.len() != 0); 
+        assert!(w[0].len() != 0); //D
+        assert!(x[0].len() == w.len()); //D
         assert!(b.len() == x.len());
         assert!(b[0].len() == w[0].len());
         let mut x1 = Vec::<F>::new();
@@ -215,6 +215,7 @@ impl<F: Float> LinearLayer<F> {
 
         self.transpose(x, self.n, self.d);
         self.transpose(w, self.m, self.d);
+        self.transpose(z, self.n, self.m);
         unsafe {
             if size_of::<F>() == 4 {
                 differentiate_float(
