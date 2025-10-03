@@ -146,12 +146,8 @@ unsigned char sgd_double(unsigned long n, unsigned long d, unsigned long m, doub
         if ((idx + 1) % m == 0 && d < DOUBLE_REGISTER_COUNT || (idx + 1) % m == 0 && register_reset_counter == 0)
         {
             offset = ((idx + 1) / m  - 1) * m;
-            operand1 = _mm512_loadu_pd(out + offset);
-            operand2 = _mm512_loadu_pd(learning_rate);
-            operand3 = _mm512_loadu_pd(previous + offset);
-            operand2 = _mm512_mul_pd(operand1, operand2);
-            operand3 = _mm512_sub_pd(operand3, operand2);
-            _mm512_storeu_pd(out + offset, operand3);
+            out[idx] = previous[idx] - learning_rate[0] * out[idx];
+
             // CLEARS fill from out buffer for carrying over purposes. Otherwise working buffer contains
             // garbage values for the following idx
             if (d < DOUBLE_REGISTER_COUNT)
@@ -165,7 +161,6 @@ unsigned char sgd_double(unsigned long n, unsigned long d, unsigned long m, doub
                 register_reset_counter = register_reset_trigger;
                 idx++;
                 register_bumps = 0;
-
             }
             NxD += d;
             DxM = dXm;
@@ -174,6 +169,7 @@ unsigned char sgd_double(unsigned long n, unsigned long d, unsigned long m, doub
         {
             if (d < DOUBLE_REGISTER_COUNT)
             {
+                out[idx] = previous[idx] - learning_rate[0] * out[idx];
                 DxM += d;
             }
             else
@@ -191,6 +187,7 @@ unsigned char sgd_double(unsigned long n, unsigned long d, unsigned long m, doub
                     NxD -= (DOUBLE_REGISTER_COUNT * register_bumps);
                     DxM += d - (DOUBLE_REGISTER_COUNT * register_bumps);
                     register_reset_counter = register_reset_trigger;
+                    out[idx] = previous[idx] - learning_rate[0] * out[idx];
                     idx++;
                     register_bumps = 0;
                 }                    
