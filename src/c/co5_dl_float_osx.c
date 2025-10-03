@@ -146,12 +146,8 @@ unsigned char sgd_float(unsigned long n, unsigned long d, unsigned long m, float
         if ((idx + 1) % m == 0 && d < FLOAT_REGISTER_COUNT || (idx + 1) % m == 0 && register_reset_counter == 0)
         {
             offset = ((idx + 1) / m  - 1) * m;
-            operand1 = _mm512_loadu_ps(out + offset);
-            operand2 = _mm512_loadu_ps(learning_rate);
-            operand3 = _mm512_loadu_ps(previous + offset);
-            operand2 = _mm512_mul_ps(operand1, operand2);
-            operand3 = _mm512_sub_ps(operand3, operand2);
-            _mm512_storeu_ps(out + offset, operand3);
+            out[idx] = previous[idx] - learning_rate[0] * out[idx];
+
             // CLEARS fill from out buffer for carrying over purposes. Otherwise working buffer contains
             // garbage values for the following idx
             if (d < FLOAT_REGISTER_COUNT)
@@ -174,6 +170,7 @@ unsigned char sgd_float(unsigned long n, unsigned long d, unsigned long m, float
         {
             if (d < FLOAT_REGISTER_COUNT)
             {
+                out[idx] = previous[idx] - learning_rate[0] * out[idx];
                 DxM += d;
             }
             else
@@ -191,6 +188,7 @@ unsigned char sgd_float(unsigned long n, unsigned long d, unsigned long m, float
                     NxD -= (FLOAT_REGISTER_COUNT * register_bumps);
                     DxM += d - (FLOAT_REGISTER_COUNT * register_bumps);
                     register_reset_counter = register_reset_trigger;
+                    out[idx] = previous[idx] - learning_rate[0] * out[idx];
                     idx++;
                     register_bumps = 0;
                 }                    
