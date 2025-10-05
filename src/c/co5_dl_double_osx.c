@@ -241,3 +241,55 @@ unsigned char scalar_X_matrix_double(unsigned long count, double *m_inout, doubl
     }
     return 0;
 }
+
+unsigned char convolve_forward_2d_double(unsigned long w, unsigned long h, unsigned long k, unsigned long count, unsigned short p, unsigned short s, double *hXw, double *kXk, double *out)
+{
+    unsigned long idx = 0;
+    unsigned short k_counter = 0;
+    unsigned short w_counter = 0;
+
+    __m512d operand1 = _mm512_setzero_pd();
+    __m512d operand2 = _mm512_setzero_pd();
+    __m512d operand3 = _mm512_setzero_pd();
+
+    double *HxW = hXw;
+    double *KxK = kXk;
+    double *working = malloc(sizeof(double) * DOUBLE_REGISTER_COUNT);
+
+    count *= k;
+    for (unsigned long c = 0; c < count; c++)
+    {
+        if (h < DOUBLE_REGISTER_COUNT)
+        {
+            if (c > 0 && c % k == 0)
+            {
+                k_counter++;
+                if (k_counter == k)
+                {
+                    w_counter++;
+                    k_counter = 0;
+                }
+                HxW = hXw + (w * w_counter) + s * k_counter;
+
+                KxK = kXk;                
+                idx = c / k;
+            }
+        }
+        memset(working, 0, sizeof(double) * DOUBLE_REGISTER_COUNT);
+        operand1 = _mm512_loadu_pd(HxW);
+        operand2 = _mm512_loadu_pd(KxK);
+        operand3 = _mm512_loadu_pd(working);
+        operand3 = _mm512_fmadd_pd(operand1, operand2, operand3);
+        _mm512_storeu_pd(working, operand3);
+        if (k < DOUBLE_REGISTER_COUNT)
+        {
+            memset(working + k , 0, sizeof(double) * (DOUBLE_REGISTER_COUNT -  k));
+        }
+        operand3 = _mm512_loadu_pd(working);
+        out[idx] += _mm512_reduce_add_pd(operand3);
+        HxW += w;
+        KxK += k; 
+    }
+    free(working);
+    return 0;
+}
