@@ -1,116 +1,127 @@
 //Copyright (c) 2025, tree-chutes
 
-use num_traits::Float;
-use super::activation_functions::Activation;
-use std::ffi::{c_double, c_uchar};
-
 use super::layers::Layer;
+use super::register::REGISTER_WIDTH;
+use super::{activation_functions::Activation, aggregator_functions::Aggregator};
+use num_traits::Float;
+use std::ffi::{c_double, c_uchar, c_ulong, c_ushort};
 
-#[link(name="co5_dl_c", kind="static")]
+#[link(name = "co5_dl_c", kind = "static")]
 #[allow(improper_ctypes)]
-unsafe extern  "C"{ 
-    unsafe fn multiply(in1: *const c_double, out: *mut c_double) -> c_uchar;
-    unsafe fn drop() -> c_uchar;
+unsafe extern "C" {
+    fn convolve_forward_2d_double(
+        w: c_ulong,
+        h: c_ulong,
+        k: c_ulong,
+        c: c_ulong,
+        p: c_ushort,
+        s: c_ushort,
+        hXw: *const c_double,
+        kXk: *const c_double,
+        out: *mut c_double,
+    ) -> c_uchar;
 }
 
-pub (in super) struct Conv2D<F: Float> {
-    pub(in super) seed: F,
-    pub(in super) o: usize,
-    pub(in super) i: usize,
-    pub(in super) w: usize,
-    pub(in super) a: Box<dyn Activation<F>>
-}
-
-impl<F: Float> Drop for Conv2D<F>{
-    fn drop(&mut self) {
-        unsafe{
-            if drop() != 0 as c_uchar{
-                println!("Failed to free the kernel");
-            }
-        }
-    }
-}
-
-impl<F: Float> Conv2D<F>{
-    fn multiply(&self, f: &[F], b: F)-> Vec<F>{
-        let mut ret: Vec<F> = vec![self.seed; self.o];
-        let mut tmp: Vec<F> = vec![self.seed; f.len()];
-        let mut sum: F = self.seed;
-
-        unsafe{
-            let out = tmp.as_mut_ptr() as *mut c_double;
-            if multiply(f.as_ptr() as *const f64, out) != 0{
-                panic!("failed to multiply");
-            }
-            for i in 0..(self.o * self.o){
-                if i > 0 && i % self.o == 0{
-                    self.a.calculate(&mut sum, b);
-                    ret[i / self.o - 1] = sum;
-                    sum = self.seed;
-                }
-                sum = sum + tmp[i];
-            }
-            self.a.calculate(&mut sum, b);
-            ret[self.o - 1] = sum;
-        }
-        ret
-    }
+pub(super) struct Conv2D<F: Float> {
+    pub(super) zero: F,
+    pub(super) h: usize,
+    pub(super) w: usize,
+    pub(super) k: usize,
+    pub(super) p: u16,
+    pub(super) s: u16,
 }
 
 impl<F: Float> Layer<F> for Conv2D<F> {
+    fn flatten(
+        &mut self,
+        mut f: Vec<Vec<F>>,
+        mut k: Vec<Vec<F>>,
+        b: Vec<Vec<F>>,
+    ) -> (Vec<F>, Vec<F>, Vec<F>) {
+        assert!(f.len() != 0);
+        assert!(f[0].len() != 0);
+        assert!(k.len() != 0);
+        assert!(k[0].len() != 0);
+        assert!(k.len() == k[0].len());
+        assert!(f.len() >= k.len());
+        assert!(f[0].len() >= k.len());
+        let check_f = f[0].len();
+        let check_k = k.len();
+        let mut f1: Vec<F> = vec![];
+        let mut k1: Vec<F> = vec![];
 
-    fn get_output_shape(&self)-> usize {
-        self.o
-    }
-
-    fn forward(&self, f: &[F], b: F)-> Vec<F>{
-        self.multiply(f, b)
-    }
-
-    fn generate_mapping(&self)-> Vec<(usize,usize)> {
-        let mut min_x: usize;
-        let mut max_x: usize;
-        let mut min_y: usize;
-        let mut max_y: usize;
-        let mut flag: bool;
-        let output_shape = self.o;
-        let o = output_shape.isqrt();
-        let mut horizontal_stride: usize = 0;
-        let mut vertical_stride: usize = 0;
-        let mut input_mapping = Vec::<(usize,usize)>::new();
-
-        for _ in 0..(output_shape){
-            flag = false;
-            min_y =  vertical_stride;
-            max_y =  vertical_stride + self.w;                            
-            min_x = horizontal_stride;
-            max_x = horizontal_stride + self.w;                    
-    
-            for y in 0..self.i{
-                for x in 0..self.i{
-                    if x >= min_x && x < max_x{
-                        if y >= min_y && y < max_y{
-                            input_mapping.push((x,y));
-                            if input_mapping.len() % (output_shape) == 0{
-                                let count = input_mapping.len() / (output_shape);
-                                if count % o != 0{
-                                    horizontal_stride += 1;
-                                }
-                                else{
-                                    horizontal_stride = 0;
-                                    vertical_stride += 1;
-                                }
-                                flag = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                if flag{
-                    break;
-                }
-            }        
+        if self.h == 0 {
+            self.h = f.len();
+            self.w = f[0].len();
+            self.k = k.len();
+        } else {
+            assert!(self.h == f.len());
+            assert!(self.w == f[0].len());
+            assert!(self.k == k.len());
         }
-        input_mapping
-    }    
+
+        for idx in 0..f.len() {
+            if f[idx].len() != check_f {
+                panic!("F out of shape: {}", idx)
+            }
+            f1.append(&mut f[idx]);
+        }
+
+        f1.resize(
+            f1.len() + (REGISTER_WIDTH / (size_of::<F>() * 8))
+                - f1.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
+            self.zero,
+        );
+        for idx in 0..k.len() {
+            if k[idx].len() != check_k {
+                panic!("K out of shape: {}", idx)
+            }
+            k1.append(&mut k[idx]);
+        }
+        k1.resize(
+            k1.len() + (REGISTER_WIDTH / (size_of::<F>() * 8))
+                - k1.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
+            self.zero,
+        );
+        (f1, k1, vec![])
+    }
+
+    fn forward(
+        &self,
+        mut data: (&[F], &mut [F], &[F]),
+        a: Option<Box<dyn Aggregator<F>>>,
+    ) -> Vec<F> {
+        let feature_len: usize = self.h * self.w + (REGISTER_WIDTH / (size_of::<F>() * 8))
+            - self.h * self.w % (REGISTER_WIDTH / (size_of::<F>() * 8));
+        let kernel_len: usize = self.k * self.k + (REGISTER_WIDTH / (size_of::<F>() * 8))
+            - self.k * self.k % (REGISTER_WIDTH / (size_of::<F>() * 8));
+
+        assert!(data.0.len() == feature_len);
+        assert!(data.1.len() == kernel_len);
+        self.execute_forward(&mut data.0, data.1)
+    }
+}
+
+impl<F: Float> Conv2D<F> {
+    fn execute_forward(&self, x: &[F], w: &mut [F]) -> Vec<F> {
+        //Assert during creation
+        let w_out = (self.w - self.k + 2 * self.p as usize) / self.s as usize + 1;
+        let h_out = (self.h - self.k + 2 * self.p as usize) / self.s as usize + 1;
+        let count = h_out * w_out;
+        let ret: Vec<F> = vec![self.zero; count];
+        unsafe {
+            convolve_forward_2d_double(
+                self.w as c_ulong,
+                self.h as c_ulong,
+                self.k as c_ulong,
+                count as c_ulong,
+                self.p as c_ushort,
+                self.s as c_ushort,
+                x.as_ptr() as *const c_double,
+                w.as_ptr() as *const c_double,
+                ret.as_ptr() as *mut c_double
+            );
+        }
+        ret
+    }
 }
