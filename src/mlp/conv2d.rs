@@ -29,6 +29,8 @@ pub(super) struct Conv2D<F: Float> {
     pub(super) k: usize,
     pub(super) p: u16,
     pub(super) s: u16,
+    pub(super) h_out: usize,
+    pub(super) w_out: usize,
 }
 
 impl<F: Float> Layer<F> for Conv2D<F> {
@@ -45,6 +47,7 @@ impl<F: Float> Layer<F> for Conv2D<F> {
         assert!(k.len() == k[0].len());
         assert!(f.len() >= k.len());
         assert!(f[0].len() >= k.len());
+
         let check_f = f[0].len();
         let check_k = k.len();
         let mut f1: Vec<F> = vec![];
@@ -54,6 +57,10 @@ impl<F: Float> Layer<F> for Conv2D<F> {
             self.h = f.len();
             self.w = f[0].len();
             self.k = k.len();
+            assert!(self.s as usize <= self.w - self.k);
+            self.w_out = (self.w - self.k + 2 * self.p as usize) / self.s as usize + 1;
+            self.h_out = (self.h - self.k + 2 * self.p as usize) / self.s as usize + 1;
+            
         } else {
             assert!(self.h == f.len());
             assert!(self.w == f[0].len());
@@ -100,9 +107,44 @@ impl<F: Float> Layer<F> for Conv2D<F> {
         assert!(data.1.len() == kernel_len);
         self.execute_forward(&mut data.0, data.1)
     }
+
+    fn backward(&self, d: (&mut [F], &mut [F], &[F]), z: &mut [F], l_r: F ) -> (Vec<F>, Vec<F>, Vec<F>) {
+        self.flip_180(d.1, self.k, self.k);
+        (vec![], vec![], vec![])
+    }
+
 }
 
 impl<F: Float> Conv2D<F> {
+
+    fn flip_180(&self, matrix: &mut [F], n: usize, m: usize){
+        let mut tmp: F;
+        let mut swap: usize;
+        let mut idx: usize;
+        let mut offset: usize = 0;
+        let mut row_counter = 0;
+        let stop_i =  n / 2;
+        loop{
+            if offset < stop_i{
+                swap = (n * row_counter) + m - 1 - offset;
+                idx = (n * row_counter) + offset;
+                tmp = matrix[swap];
+                matrix[swap] = matrix[idx];
+                matrix[idx] = tmp;
+                tmp = self.zero;
+                offset += 1;
+            }
+            else {
+                row_counter += 1;
+                if (row_counter == m){
+                    break;
+                }
+                offset = 0;
+                continue;
+            }
+        }
+    }
+
     fn execute_forward(&self, x: &[F], w: &mut [F]) -> Vec<F> {
         //Assert during creation
         let w_out = (self.w - self.k + 2 * self.p as usize) / self.s as usize + 1;
