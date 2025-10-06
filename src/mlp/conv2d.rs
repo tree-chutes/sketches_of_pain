@@ -120,27 +120,34 @@ impl<F: Float> Conv2D<F> {
     fn flip_180(&self, matrix: &mut [F], n: usize, m: usize){
         let mut tmp: F;
         let mut swap: usize;
-        let mut idx: usize;
+        let mut idx_row: usize;
+        let mut swap_row: usize;
         let mut offset: usize = 0;
-        let mut row_counter = 0;
-        let stop_i =  n / 2;
-        loop{
-            if offset < stop_i{
-                swap = (n * row_counter) + m - 1 - offset;
-                idx = (n * row_counter) + offset;
-                tmp = matrix[swap];
-                matrix[swap] = matrix[idx];
-                matrix[idx] = tmp;
-                tmp = self.zero;
-                offset += 1;
-            }
-            else {
+        let mut swap_offset: usize = 0;
+        let mut row_counter: usize = 0;
+        let mut idx = 0;
+        let mut stop_row =  n / 2 ;
+
+        if n % 2 != 0{
+            stop_row += 1;
+        }
+
+        loop{            
+            idx_row = idx / m;
+            swap_row = n - 1 - idx_row;            
+            offset = idx % m;
+            swap_offset = m - 1 - offset; 
+            swap = (n * swap_row) + swap_offset;
+            idx = (n * idx_row) + offset;
+            tmp = matrix[swap];
+            matrix[swap] = matrix[idx];
+            matrix[idx] = tmp;
+            idx += 1;
+            if idx % m == 0{
                 row_counter += 1;
-                if (row_counter == m){
+                if (row_counter == stop_row){
                     break;
                 }
-                offset = 0;
-                continue;
             }
         }
     }
