@@ -13,12 +13,16 @@ unsigned char dot_product_double(unsigned long n, unsigned long d, unsigned long
     unsigned long register_reset_counter = register_reset_trigger; //keeps track of when the pointers need to change
     unsigned long count = n * m * register_reset_trigger;
 
-    double *working = malloc(sizeof(double) * DOUBLE_REGISTER_COUNT);    
     __m512d operand1 = _mm512_setzero_pd();
     __m512d operand2 = _mm512_setzero_pd();
     __m512d operand3 = _mm512_setzero_pd();
     double *NxD = nXd;
     double *DxM = dXm;
+    double *working = malloc(sizeof(double) * DOUBLE_REGISTER_COUNT);
+    if (working == NULL)
+    {
+        return 1;
+    }    
 
     for (unsigned long c = 0; c < count; c++)
     {
@@ -104,12 +108,16 @@ unsigned char sgd_double(unsigned long n, unsigned long d, unsigned long m, doub
     unsigned long register_reset_counter = register_reset_trigger; //keeps track of when the pointers need to change
     unsigned long count = n * m * register_reset_trigger;
 
-    double *working = malloc(sizeof(double) * DOUBLE_REGISTER_COUNT);
     __m512d operand1 = _mm512_setzero_pd();
     __m512d operand2 = _mm512_setzero_pd();
     __m512d operand3 = _mm512_setzero_pd();
     double *NxD = nXd;
     double *DxM = dXm;
+    double *working = malloc(sizeof(double) * DOUBLE_REGISTER_COUNT);
+    if (working == NULL)
+    {
+        return 1;
+    }    
 
     for (unsigned long c = 0; c < count; c++)
     {
@@ -256,6 +264,16 @@ unsigned char convolve_forward_2d_double(unsigned long w, unsigned long h, unsig
     double *KxK = kXk;
     double *working = malloc(sizeof(double) * DOUBLE_REGISTER_COUNT);
 
+    if (p != 0)
+    {
+        HxW = pad_matrix_double(h, w, p, hXw);
+    }
+
+    if (working == NULL || HxW == NULL)
+    {
+        return 1;
+    }    
+
     count *= k;
     for (unsigned long c = 0; c < count; c++)
     {
@@ -291,5 +309,33 @@ unsigned char convolve_forward_2d_double(unsigned long w, unsigned long h, unsig
         KxK += k; 
     }
     free(working);
+    if (p != 0)
+    {
+        free(HxW);
+    }
     return 0;
+}
+
+double* pad_matrix_double(unsigned long h, unsigned long w, unsigned short p, double* m)
+{
+    double *start;
+    unsigned long loop_count = h * w;
+    unsigned long padded_width = w + 2 * p;
+    unsigned long padded_height = h + 2 * p;
+    unsigned long buffer_size = padded_height * padded_width;
+    double *ret = malloc(sizeof(double) *  buffer_size);
+
+    if (ret != NULL)
+    {
+        start = ret + sizeof(double) * p * padded_width;
+        memset(ret, 0, buffer_size);
+
+        for (unsigned long i = 0; i < loop_count; i++)
+        {
+            //start + p is start row padding
+            memcpy(start + p, m + (i * w), sizeof(double) * w);
+            start += p; //tail
+        }
+    }
+    return ret;
 }
