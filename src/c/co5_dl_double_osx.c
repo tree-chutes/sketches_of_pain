@@ -2,6 +2,7 @@
 
 #include <immintrin.h>
 #include <string.h>
+#include<co5_dl_double.h>
 
 const unsigned char DOUBLE_REGISTER_COUNT = 8;
 
@@ -250,9 +251,10 @@ unsigned char scalar_X_matrix_double(unsigned long count, double *m_inout, doubl
     return 0;
 }
 
-unsigned char convolve_forward_2d_double(unsigned long w, unsigned long h, unsigned long k, unsigned long count, unsigned short p, unsigned short s, double *hXw, double *kXk, double *out)
+unsigned char convolve_2d_double(unsigned long w, unsigned long h, unsigned long k, unsigned long count, unsigned short p, unsigned short s, double *hXw, double *kXk, double *out)
 {
     unsigned long idx = 0;
+    unsigned long updated_w = w;
     unsigned short k_counter = 0;
     unsigned short w_counter = 0;
 
@@ -260,20 +262,23 @@ unsigned char convolve_forward_2d_double(unsigned long w, unsigned long h, unsig
     __m512d operand2 = _mm512_setzero_pd();
     __m512d operand3 = _mm512_setzero_pd();
 
-    double *HxW = hXw;
+    double *HxW;
+    double *updated_hXw = hXw;
     double *KxK = kXk;
     double *working = malloc(sizeof(double) * DOUBLE_REGISTER_COUNT);
 
     if (p != 0)
     {
-        HxW = pad_matrix_double(h, w, p, hXw);
+        updated_hXw = pad_matrix_double(h, w, p, hXw);
+        updated_w = w + 2 * p;
     }
 
-    if (working == NULL || HxW == NULL)
+    if (working == NULL || updated_hXw == NULL)
     {
         return 1;
     }    
 
+    HxW = updated_hXw;
     count *= k;
     for (unsigned long c = 0; c < count; c++)
     {
@@ -282,13 +287,12 @@ unsigned char convolve_forward_2d_double(unsigned long w, unsigned long h, unsig
             if (c > 0 && c % k == 0)
             {
                 k_counter++;
-                if (k_counter == k)
+                if (k_counter == k + p)
                 {
                     w_counter++;
                     k_counter = 0;
                 }
-                HxW = hXw + (w * w_counter) + s * k_counter;
-
+                HxW = updated_hXw + (updated_w * w_counter) + s * k_counter;
                 KxK = kXk;                
                 idx = c / k;
             }
@@ -305,13 +309,13 @@ unsigned char convolve_forward_2d_double(unsigned long w, unsigned long h, unsig
         }
         operand3 = _mm512_loadu_pd(working);
         out[idx] += _mm512_reduce_add_pd(operand3);
-        HxW += w;
+        HxW += updated_w;
         KxK += k; 
     }
     free(working);
     if (p != 0)
     {
-        free(HxW);
+        free(updated_hXw);
     }
     return 0;
 }
@@ -319,7 +323,6 @@ unsigned char convolve_forward_2d_double(unsigned long w, unsigned long h, unsig
 double* pad_matrix_double(unsigned long h, unsigned long w, unsigned short p, double* m)
 {
     double *start;
-    unsigned long loop_count = h * w;
     unsigned long padded_width = w + 2 * p;
     unsigned long padded_height = h + 2 * p;
     unsigned long buffer_size = padded_height * padded_width;
@@ -327,14 +330,14 @@ double* pad_matrix_double(unsigned long h, unsigned long w, unsigned short p, do
 
     if (ret != NULL)
     {
-        start = ret + sizeof(double) * p * padded_width;
+        start = ret + p * padded_width;
         memset(ret, 0, buffer_size);
 
-        for (unsigned long i = 0; i < loop_count; i++)
+        for (unsigned long i = 0; i < h; i++)
         {
-            //start + p is start row padding
-            memcpy(start + p, m + (i * w), sizeof(double) * w);
-            start += p; //tail
+            start += p; //padded head
+            memcpy(start, m + (i * w), sizeof(double) * w);
+            start += w + p; //w + padded tail
         }
     }
     return ret;
