@@ -9,7 +9,7 @@ use std::ffi::{c_double, c_uchar, c_ulong, c_ushort};
 #[link(name = "co5_dl_c", kind = "static")]
 #[allow(improper_ctypes)]
 unsafe extern "C" {
-    fn convolve_forward_2d_double(
+    fn convolve_2d_double(
         w: c_ulong,
         h: c_ulong,
         k: c_ulong,
@@ -109,8 +109,11 @@ impl<F: Float> Layer<F> for Conv2D<F> {
     }
 
     fn backward(&self, d: (&mut [F], &mut [F], &[F]), z: &mut [F], l_r: F ) -> (Vec<F>, Vec<F>, Vec<F>) {
-        self.flip_180(d.1, self.k, self.k);
-        (vec![], vec![], vec![])
+        let kernel_len: usize = self.k * self.k + (REGISTER_WIDTH / (size_of::<F>() * 8))
+            - self.k * self.k % (REGISTER_WIDTH / (size_of::<F>() * 8));
+        assert!(d.1.len() == kernel_len);
+        assert!(z.len() == kernel_len);
+        self.execute_backward(d.0, d.1, z, l_r)
     }
 
 }
@@ -152,14 +155,47 @@ impl<F: Float> Conv2D<F> {
         }
     }
 
-    fn execute_forward(&self, x: &[F], w: &mut [F]) -> Vec<F> {
-        //Assert during creation
-        let w_out = (self.w - self.k + 2 * self.p as usize) / self.s as usize + 1;
-        let h_out = (self.h - self.k + 2 * self.p as usize) / self.s as usize + 1;
-        let count = h_out * w_out;
-        let ret: Vec<F> = vec![self.zero; count];
+    fn execute_backward(&self, x: &[F], w: &mut [F], z: &mut [F], l_r: F ) -> (Vec<F>, Vec<F>, Vec<F>) {
+        let padding = self.k - 1;
+        let ret_x: Vec<F> = vec![self.zero; self.h * self.w];
+        let ret_k: Vec<F> = vec![self.zero; self.k * self.k];
+
+        self.flip_180(w, self.k, self.k);
+
         unsafe {
-            convolve_forward_2d_double(
+            convolve_2d_double(
+                self.w as c_ulong,
+                self.h as c_ulong,
+                self.k as c_ulong,
+                (self.k * self.k) as c_ulong,
+                0 as c_ushort,
+                self.s as c_ushort,
+                x.as_ptr() as *const c_double,
+                z.as_ptr() as *const c_double,
+                ret_k.as_ptr() as *mut c_double
+            );
+        }
+        unsafe {
+            convolve_2d_double(
+                self.k as c_ulong,
+                self.k as c_ulong,
+                self.k as c_ulong,
+                (self.h * self.w) as c_ulong,
+                padding as c_ushort,
+                self.s as c_ushort,
+                z.as_ptr() as *const c_double,
+                w.as_ptr() as *const c_double,
+                ret_x.as_ptr() as *mut c_double
+            );
+        }
+        (ret_x, ret_k, vec![])
+    }
+
+    fn execute_forward(&self, x: &[F], w: &mut [F]) -> Vec<F> {
+        let count = self.h_out * self.w_out;
+        let mut ret: Vec<F> = vec![self.zero; count];
+        unsafe {
+            convolve_2d_double(
                 self.w as c_ulong,
                 self.h as c_ulong,
                 self.k as c_ulong,
@@ -171,6 +207,10 @@ impl<F: Float> Conv2D<F> {
                 ret.as_ptr() as *mut c_double
             );
         }
+        ret.resize(
+            ret.len() + (REGISTER_WIDTH / (size_of::<F>() * 8)) - ret.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
+            self.zero,
+        );
         ret
     }
 }
