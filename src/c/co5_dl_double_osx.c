@@ -2,7 +2,7 @@
 
 #include <immintrin.h>
 #include <string.h>
-#include<co5_dl_double.h>
+#include<co5_dl_osx_double.h>
 
 const unsigned char DOUBLE_REGISTER_COUNT = 8;
 
@@ -251,12 +251,15 @@ unsigned char scalar_X_matrix_double(unsigned long count, double *m_inout, doubl
     return 0;
 }
 
-unsigned char convolve_2d_double(unsigned long w, unsigned long h, unsigned long k, unsigned long count, unsigned short p, unsigned short s, double *hXw, double *kXk, double *out)
+unsigned char convolve_2d_double(unsigned long w, unsigned long h, unsigned long k, unsigned long o_w, unsigned long count, unsigned short p, unsigned short s, double *hXw, double *kXk, double *out)
 {
     unsigned long idx = 0;
     unsigned long updated_w = w;
     unsigned short k_counter = 0;
     unsigned short w_counter = 0;
+    unsigned long register_bumps = 0; //This should disappear with detailed analysis
+    unsigned long register_reset_trigger = k / DOUBLE_REGISTER_COUNT + (k % DOUBLE_REGISTER_COUNT != 0);
+    unsigned long register_reset_counter = register_reset_trigger; //keeps track of when the pointers need to change
 
     __m512d operand1 = _mm512_setzero_pd();
     __m512d operand2 = _mm512_setzero_pd();
@@ -279,7 +282,7 @@ unsigned char convolve_2d_double(unsigned long w, unsigned long h, unsigned long
     }    
 
     HxW = updated_hXw;
-    count *= k;
+    count *= k * register_reset_trigger;
     for (unsigned long c = 0; c < count; c++)
     {
         if (h < DOUBLE_REGISTER_COUNT)
@@ -287,7 +290,7 @@ unsigned char convolve_2d_double(unsigned long w, unsigned long h, unsigned long
             if (c > 0 && c % k == 0)
             {
                 k_counter++;
-                if (k_counter == k + p)
+                if (k_counter == o_w + p)
                 {
                     w_counter++;
                     k_counter = 0;
@@ -297,20 +300,85 @@ unsigned char convolve_2d_double(unsigned long w, unsigned long h, unsigned long
                 idx = c / k;
             }
         }
+        else
+        {
+            if (c > 0 && c % (k * register_reset_trigger) == 0)
+            {
+                k_counter++;
+                if (k_counter == o_w + p)
+                {
+                    w_counter++;
+                    k_counter = 0;
+                }
+                HxW = updated_hXw + (updated_w * w_counter) + s * k_counter;
+                KxK = kXk;                
+                idx = c / (k * register_reset_trigger);
+                register_reset_counter = register_reset_trigger;
+            }
+            // else
+            // {
+                register_reset_counter--;
+            // }
+        }
         memset(working, 0, sizeof(double) * DOUBLE_REGISTER_COUNT);
         operand1 = _mm512_loadu_pd(HxW);
         operand2 = _mm512_loadu_pd(KxK);
         operand3 = _mm512_loadu_pd(working);
         operand3 = _mm512_fmadd_pd(operand1, operand2, operand3);
         _mm512_storeu_pd(working, operand3);
-        if (k < DOUBLE_REGISTER_COUNT)
+        if (k < DOUBLE_REGISTER_COUNT || register_reset_counter == 0)
         {
-            memset(working + k , 0, sizeof(double) * (DOUBLE_REGISTER_COUNT -  k));
+            // CLEARS fill from working buffer for reducing purposes. Otherwise working buffer contains
+            // garbage values for the current idx
+            if (k < DOUBLE_REGISTER_COUNT)
+            {
+                memset(working + k , 0, sizeof(double) * (DOUBLE_REGISTER_COUNT - k)); 
+            }
+            else
+            {
+                memset(working + k % DOUBLE_REGISTER_COUNT, 0, sizeof(double) * (DOUBLE_REGISTER_COUNT - k % DOUBLE_REGISTER_COUNT)); 
+            }
         }
         operand3 = _mm512_loadu_pd(working);
         out[idx] += _mm512_reduce_add_pd(operand3);
-        HxW += updated_w;
-        KxK += k; 
+
+        if ((idx + 1) % k == 0)
+        {
+            if (k > DOUBLE_REGISTER_COUNT)
+            {
+                HxW += (DOUBLE_REGISTER_COUNT * register_bumps);
+                register_reset_counter = register_reset_trigger;
+                idx++;
+                register_bumps = 0;
+            }
+            HxW += updated_w;
+            KxK += k; 
+        }
+        else
+        {
+            if (k < DOUBLE_REGISTER_COUNT)
+            {
+                KxK += k;
+                HxW += updated_w; 
+            }
+            else
+            {
+                if (register_reset_counter > 0)
+                {
+                    register_bumps++;
+                    HxW += DOUBLE_REGISTER_COUNT;
+                    KxK += DOUBLE_REGISTER_COUNT;
+                }
+                else
+                {
+                    //They reset same direction beginning of next row                   
+                    HxW += w - k + 1;
+                    KxK += k % DOUBLE_REGISTER_COUNT;
+                    register_reset_counter = register_reset_trigger;
+                    register_bumps = 0;
+                }                    
+            }
+        }
     }
     free(working);
     if (p != 0)
