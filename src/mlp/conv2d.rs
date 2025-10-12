@@ -4,7 +4,8 @@ use super::layers::Layer;
 use super::register::REGISTER_WIDTH;
 use super::{activation_functions::Activation, aggregator_functions::Aggregator};
 use num_traits::Float;
-use std::ffi::{c_double, c_uchar, c_ulong, c_ushort};
+use std::ffi::{c_double, c_float, c_uchar, c_ulong, c_ushort};
+use std::ptr;
 
 #[link(name = "co5_dl_c", kind = "static")]
 #[allow(improper_ctypes)]
@@ -13,12 +14,30 @@ unsafe extern "C" {
         w: c_ulong,
         h: c_ulong,
         k: c_ulong,
+        o_w: c_ulong,
         c: c_ulong,
         p: c_ushort,
         s: c_ushort,
         hXw: *const c_double,
         kXk: *const c_double,
+        prev: *const c_double,
+        l_r: *const c_double,
         out: *mut c_double,
+    ) -> c_uchar;
+
+    fn convolve_2d_float(
+        w: c_ulong,
+        h: c_ulong,
+        k: c_ulong,
+        o_w: c_ulong,
+        c: c_ulong,
+        p: c_ushort,
+        s: c_ushort,
+        hXw: *const c_float,
+        kXk: *const c_float,
+        prev: *const c_float,
+        l_r: *const c_float,
+        out: *mut c_float,
     ) -> c_uchar;
 }
 
@@ -111,9 +130,12 @@ impl<F: Float> Layer<F> for Conv2D<F> {
     fn backward(&self, d: (&mut [F], &mut [F], &[F]), z: &mut [F], l_r: F ) -> (Vec<F>, Vec<F>, Vec<F>) {
         let kernel_len: usize = self.k * self.k + (REGISTER_WIDTH / (size_of::<F>() * 8))
             - self.k * self.k % (REGISTER_WIDTH / (size_of::<F>() * 8));
+        let out_len: usize = self.w_out * self.h_out + (REGISTER_WIDTH / (size_of::<F>() * 8))
+            - self.w_out * self.h_out % (REGISTER_WIDTH / (size_of::<F>() * 8));
         assert!(d.1.len() == kernel_len);
-        assert!(z.len() == kernel_len);
-        self.execute_backward(d.0, d.1, z, l_r)
+        assert!(z.len() == out_len);
+        let lr = [l_r];
+        self.execute_backward(d.0, d.1, z, &lr)
     }
 
 }
@@ -155,38 +177,79 @@ impl<F: Float> Conv2D<F> {
         }
     }
 
-    fn execute_backward(&self, x: &[F], w: &mut [F], z: &mut [F], l_r: F ) -> (Vec<F>, Vec<F>, Vec<F>) {
+    fn execute_backward(&self, x: &[F], w: &mut [F], z: &mut [F], l_r: &[F] ) -> (Vec<F>, Vec<F>, Vec<F>) {
         let padding = self.k - 1;
         let ret_x: Vec<F> = vec![self.zero; self.h * self.w];
         let ret_k: Vec<F> = vec![self.zero; self.k * self.k];
-
-        self.flip_180(w, self.k, self.k);
-
+        
         unsafe {
-            convolve_2d_double(
-                self.w as c_ulong,
-                self.h as c_ulong,
-                self.k as c_ulong,
-                (self.k * self.k) as c_ulong,
-                0 as c_ushort,
-                self.s as c_ushort,
-                x.as_ptr() as *const c_double,
-                z.as_ptr() as *const c_double,
-                ret_k.as_ptr() as *mut c_double
-            );
+            if size_of::<F>() == 8 {
+                convolve_2d_double(
+                    self.w as c_ulong,
+                    self.h as c_ulong,
+                    self.w_out as c_ulong,
+                    self.k as c_ulong,
+                    (self.k * self.k) as c_ulong,
+                    0 as c_ushort,
+                    self.s as c_ushort,
+                    x.as_ptr() as *const c_double,
+                    z.as_ptr() as *const c_double,
+                    ptr::null() as *const c_double, 
+                    l_r.as_ptr() as *const c_double,
+                    ret_k.as_ptr() as *mut c_double
+                );
+            }
+            else{
+                convolve_2d_float(
+                    self.w as c_ulong,
+                    self.h as c_ulong,
+                    self.w_out as c_ulong,
+                    self.k as c_ulong,
+                    (self.k * self.k) as c_ulong,
+                    0 as c_ushort,
+                    self.s as c_ushort,
+                    x.as_ptr() as *const c_float,
+                    z.as_ptr() as *const c_float,
+                    ptr::null() as *const c_float, 
+                    l_r.as_ptr() as *const c_float,
+                    ret_k.as_ptr() as *mut c_float
+                );
+            }
         }
+        self.flip_180(w, self.k, self.k);
         unsafe {
-            convolve_2d_double(
-                self.k as c_ulong,
-                self.k as c_ulong,
-                self.k as c_ulong,
-                (self.h * self.w) as c_ulong,
-                padding as c_ushort,
-                self.s as c_ushort,
-                z.as_ptr() as *const c_double,
-                w.as_ptr() as *const c_double,
-                ret_x.as_ptr() as *mut c_double
-            );
+            if size_of::<F>() == 8 {
+                convolve_2d_double(
+                    self.w_out as c_ulong,
+                    self.h_out as c_ulong,
+                    self.k as c_ulong,
+                    self.w as c_ulong,
+                    (self.h * self.w) as c_ulong,
+                    padding as c_ushort,
+                    self.s as c_ushort,
+                    z.as_ptr() as *const c_double,
+                    w.as_ptr() as *const c_double,
+                    ptr::null() as *const c_double,
+                    l_r.as_ptr() as *const c_double,
+                    ret_x.as_ptr() as *mut c_double
+                );
+            }
+            else{
+                convolve_2d_float(
+                    self.w_out as c_ulong,
+                    self.h_out as c_ulong,
+                    self.k as c_ulong,
+                    self.w as c_ulong,
+                    (self.h * self.w) as c_ulong,
+                    padding as c_ushort,
+                    self.s as c_ushort,
+                    z.as_ptr() as *const c_float,
+                    w.as_ptr() as *const c_float,
+                    ptr::null() as *const c_float,
+                    l_r.as_ptr() as *const c_float,
+                    ret_x.as_ptr() as *mut c_float
+                );
+            }
         }
         (ret_x, ret_k, vec![])
     }
@@ -195,17 +258,38 @@ impl<F: Float> Conv2D<F> {
         let count = self.h_out * self.w_out;
         let mut ret: Vec<F> = vec![self.zero; count];
         unsafe {
-            convolve_2d_double(
-                self.w as c_ulong,
-                self.h as c_ulong,
-                self.k as c_ulong,
-                count as c_ulong,
-                self.p as c_ushort,
-                self.s as c_ushort,
-                x.as_ptr() as *const c_double,
-                w.as_ptr() as *const c_double,
-                ret.as_ptr() as *mut c_double
-            );
+            if size_of::<F>() == 8 {
+                convolve_2d_double(
+                    self.w as c_ulong,
+                    self.h as c_ulong,
+                    self.k as c_ulong,
+                    self.w_out as c_ulong,
+                    count as c_ulong,
+                    self.p as c_ushort,
+                    self.s as c_ushort,
+                    x.as_ptr() as *const c_double,
+                    w.as_ptr() as *const c_double,
+                    ptr::null() as *const c_double,
+                    ptr::null() as *const c_double,
+                    ret.as_ptr() as *mut c_double
+                );
+            }
+            else{
+                convolve_2d_float(
+                    self.w as c_ulong,
+                    self.h as c_ulong,
+                    self.k as c_ulong,
+                    self.w_out as c_ulong,
+                    count as c_ulong,
+                    self.p as c_ushort,
+                    self.s as c_ushort,
+                    x.as_ptr() as *const c_float,
+                    w.as_ptr() as *const c_float,
+                    ptr::null() as *const c_float,
+                    ptr::null() as *const c_float,
+                    ret.as_ptr() as *mut c_float
+                );
+            }
         }
         ret.resize(
             ret.len() + (REGISTER_WIDTH / (size_of::<F>() * 8)) - ret.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
