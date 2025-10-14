@@ -2,24 +2,28 @@
 
 #include <immintrin.h>
 #include <string.h>
-#include <co5_dl_osx_double.h>
+#include <co5_dl_osx.h>
 
 const unsigned char DOUBLE_REGISTER_COUNT = 8;
 
 unsigned char dot_product_double(unsigned long n, unsigned long d, unsigned long m, double *nXd, double *dXm, double *b, double *out)
 {
+    // The correct calculation will come from finding if d == 1 or not
+    // if d != 1 then register reset will come from d. If not then n == m
+    // either will work
     unsigned long idx = 0;
-    unsigned long register_bumps = 0; // This should disappear with detailed analysis
-    unsigned long register_reset_trigger = d / DOUBLE_REGISTER_COUNT + (d % DOUBLE_REGISTER_COUNT != 0);
+    unsigned long register_reset_trigger = (d != 1 ? d : n) / DOUBLE_REGISTER_COUNT + ((d != 1 ? d : n) % DOUBLE_REGISTER_COUNT != 0);
     unsigned long register_reset_counter = register_reset_trigger; // keeps track of when the pointers need to change
     unsigned long count = n * m * register_reset_trigger;
 
     __m512d operand1 = _mm512_setzero_pd();
     __m512d operand2 = _mm512_setzero_pd();
     __m512d operand3 = _mm512_setzero_pd();
+
     double *NxD = nXd;
     double *DxM = dXm;
     double *working = malloc(sizeof(double) * DOUBLE_REGISTER_COUNT);
+
     if (working == NULL)
     {
         return 1;
@@ -27,21 +31,13 @@ unsigned char dot_product_double(unsigned long n, unsigned long d, unsigned long
 
     for (unsigned long c = 0; c < count; c++)
     {
-        if (d < DOUBLE_REGISTER_COUNT)
-        {
-            idx = c;
-        }
-        else
-        {
-            register_reset_counter--;
-        }
         memset(working, 0, sizeof(double) * DOUBLE_REGISTER_COUNT);
         operand1 = _mm512_loadu_pd(NxD);
         operand2 = _mm512_loadu_pd(DxM);
         operand3 = _mm512_loadu_pd(working);
         operand3 = _mm512_fmadd_pd(operand1, operand2, operand3);
         _mm512_storeu_pd(working, operand3);
-        if (d < DOUBLE_REGISTER_COUNT || register_reset_counter == 0)
+        if (d < DOUBLE_REGISTER_COUNT || --register_reset_counter == 0)
         {
             // CLEARS fill from working buffer for reducing purposes. Otherwise working buffer contains
             // garbage values for the current idx
@@ -57,42 +53,26 @@ unsigned char dot_product_double(unsigned long n, unsigned long d, unsigned long
         operand3 = _mm512_loadu_pd(working);
         out[idx] += _mm512_reduce_add_pd(operand3);
         out[idx] += b[(idx % d)];
-        if ((idx + 1) % m == 0)
+        if (d < DOUBLE_REGISTER_COUNT)
         {
-            if (d > DOUBLE_REGISTER_COUNT)
-            {
-                NxD -= (DOUBLE_REGISTER_COUNT * register_bumps);
-                register_reset_counter = register_reset_trigger;
-                idx++;
-                register_bumps = 0;
-            }
-            NxD += d;
-            DxM = dXm;
+            DxM += d;
+            idx++;
         }
         else
         {
-            if (d < DOUBLE_REGISTER_COUNT)
+            if (register_reset_counter > 0)
             {
-                DxM += d;
+                NxD += DOUBLE_REGISTER_COUNT;
+                DxM += DOUBLE_REGISTER_COUNT;
             }
             else
             {
-                if (register_reset_counter > 0)
-                {
-                    register_bumps++;
-                    NxD += DOUBLE_REGISTER_COUNT;
-                    DxM += DOUBLE_REGISTER_COUNT;
-                }
-                else
-                {
-                    // They reset in different directions: start of same x row, start next
-                    // W column
-                    NxD -= (DOUBLE_REGISTER_COUNT * register_bumps);
-                    DxM += d - (DOUBLE_REGISTER_COUNT * register_bumps);
-                    register_reset_counter = register_reset_trigger;
-                    idx++;
-                    register_bumps = 0;
-                }
+                // They reset in different directions: start of same x row, start next
+                // W column
+                NxD -= DOUBLE_REGISTER_COUNT * (register_reset_trigger - register_reset_counter);
+                DxM += d - (DOUBLE_REGISTER_COUNT * (register_reset_trigger - register_reset_counter));
+                register_reset_counter = register_reset_trigger;
+                idx++;
             }
         }
     }
@@ -100,21 +80,26 @@ unsigned char dot_product_double(unsigned long n, unsigned long d, unsigned long
     return 0;
 }
 
-unsigned char sgd_double(unsigned long n, unsigned long d, unsigned long m, double *learning_rate, double *nXd, double *dXm, double *previous, double *out)
+unsigned char linear_sgd_double(unsigned long n, unsigned long d, unsigned long m, double *learning_rate, double *y, double *derivative, double *previous, double *out)
 {
-    unsigned long idx = 0;
-    unsigned long offset;
-    unsigned long register_bumps = 0; // This should disappear with detailed analysis
-    unsigned long register_reset_trigger = d / DOUBLE_REGISTER_COUNT + (d % DOUBLE_REGISTER_COUNT != 0);
-    unsigned long register_reset_counter = register_reset_trigger; // keeps track of when the pointers need to change
-    unsigned long count = n * m * register_reset_trigger;
+    // The correct calculation will come from finding if d == 1 or not
+    // if d != 1 then register pointer moves will come from d. If not then n == m
+    // either will work
 
-    __m512d operand1 = _mm512_setzero_pd();
-    __m512d operand2 = _mm512_setzero_pd();
+    unsigned long idx = 0;
+    unsigned long register_reset_trigger = (d != 1 ? d : n) / DOUBLE_REGISTER_COUNT + ((d != 1 ? d : n) % DOUBLE_REGISTER_COUNT != 0);
+    unsigned long register_reset_counter = register_reset_trigger; // keeps track of when the pointers need to change
+    unsigned long count = d != 1 ? n * m * register_reset_trigger : register_reset_trigger;
+    unsigned long offset;
+
+    __m512d predicted_s = _mm512_setzero_pd();
+    __m512d differential_s = _mm512_setzero_pd();
     __m512d operand3 = _mm512_setzero_pd();
-    double *NxD = nXd;
-    double *DxM = dXm;
+    __m512d learning_rate_s = _mm512_loadu_pd(learning_rate);
+    double *predicted = y;
+    double *differential = derivative;
     double *working = malloc(sizeof(double) * DOUBLE_REGISTER_COUNT);
+
     if (working == NULL)
     {
         return 1;
@@ -122,118 +107,47 @@ unsigned char sgd_double(unsigned long n, unsigned long d, unsigned long m, doub
 
     for (unsigned long c = 0; c < count; c++)
     {
-        if (d < DOUBLE_REGISTER_COUNT)
-        {
-            idx = c;
-        }
-        else
-        {
-            register_reset_counter--;
-        }
         memset(working, 0, sizeof(double) * DOUBLE_REGISTER_COUNT);
-        operand1 = _mm512_loadu_pd(NxD);
-        operand2 = _mm512_loadu_pd(DxM);
+        predicted_s = _mm512_loadu_pd(predicted);
+        differential_s = _mm512_loadu_pd(differential);
         operand3 = _mm512_loadu_pd(working);
-        operand3 = _mm512_fmadd_pd(operand1, operand2, operand3);
-        _mm512_storeu_pd(working, operand3);
-        if (d < DOUBLE_REGISTER_COUNT || register_reset_counter == 0)
-        {
-            // CLEARS fill from working buffer for reducing purposes. Otherwise working buffer contains
-            // garbage values for the current idx
-            if (d < DOUBLE_REGISTER_COUNT)
-            {
-                memset(working + d, 0, sizeof(double) * (DOUBLE_REGISTER_COUNT - d));
-            }
-            else
-            {
-                memset(working + d % DOUBLE_REGISTER_COUNT, 0, sizeof(double) * (DOUBLE_REGISTER_COUNT - d % DOUBLE_REGISTER_COUNT));
-            }
-        }
-        operand3 = _mm512_loadu_pd(working);
-        out[idx] += _mm512_reduce_add_pd(operand3);
-        // OR takes care of D > DOUBLE_REGISTER_COUNT
-        if ((idx + 1) % m == 0 && d < DOUBLE_REGISTER_COUNT || (idx + 1) % m == 0 && register_reset_counter == 0)
-        {
-            offset = ((idx + 1) / m - 1) * m;
-            out[idx] = previous[idx] - learning_rate[0] * out[idx];
-
-            // CLEARS fill from out buffer for carrying over purposes. Otherwise working buffer contains
-            // garbage values for the following idx
-            if (d < DOUBLE_REGISTER_COUNT)
-            {
-                memset(out + offset + d, 0, sizeof(double) * (DOUBLE_REGISTER_COUNT - d));
-            }
-            else
-            {
-                memset(out + offset + d, 0, sizeof(double) * (DOUBLE_REGISTER_COUNT - d % DOUBLE_REGISTER_COUNT));
-                NxD -= (DOUBLE_REGISTER_COUNT * register_bumps);
-                register_reset_counter = register_reset_trigger;
-                idx++;
-                register_bumps = 0;
-            }
-            NxD += d;
-            DxM = dXm;
-        }
-        else
-        {
-            if (d < DOUBLE_REGISTER_COUNT)
-            {
-                out[idx] = previous[idx] - learning_rate[0] * out[idx];
-                DxM += d;
-            }
-            else
-            {
-                if (register_reset_counter > 0)
-                {
-                    register_bumps++;
-                    NxD += DOUBLE_REGISTER_COUNT;
-                    DxM += DOUBLE_REGISTER_COUNT;
-                }
-                else
-                {
-                    // They reset in different directions: start of same x row, start next
-                    // W column
-                    NxD -= (DOUBLE_REGISTER_COUNT * register_bumps);
-                    DxM += d - (DOUBLE_REGISTER_COUNT * register_bumps);
-                    register_reset_counter = register_reset_trigger;
-                    out[idx] = previous[idx] - learning_rate[0] * out[idx];
-                    idx++;
-                    register_bumps = 0;
-                }
-            }
-        }
+        operand3 = _mm512_mul_pd(learning_rate_s, differential_s);
+        operand3 = _mm512_sub_pd(predicted_s, operand3);
+        _mm512_storeu_pd(out, operand3);
+        predicted += DOUBLE_REGISTER_COUNT;
+        differential += DOUBLE_REGISTER_COUNT;
+        out += DOUBLE_REGISTER_COUNT;
     }
     free(working);
     return 0;
 }
 
-unsigned char squared_loss_double(unsigned long count, double *p_inout, double *t, double *out)
+unsigned char squared_loss_double(unsigned long count, double *p, double *t, double *total)
 {
     __m512d operand1 = _mm512_setzero_pd();
     __m512d operand2 = _mm512_setzero_pd();
     __m512d operand3 = _mm512_setzero_pd();
 
-    double *tmp0 = p_inout;
+    double *tmp0 = p;
     double *tmp1 = t;
-    double *tmp2 = out;
-
-    for (unsigned long c = 0; c < count; c += DOUBLE_REGISTER_COUNT)
+    // REMEMBER vectors are filled when flattened so can safely advance DOUBLE_REGISTER_COUNT
+    count = count / DOUBLE_REGISTER_COUNT + (count % DOUBLE_REGISTER_COUNT != 0);
+    for (unsigned long c = 0; c < count; c++)
     {
         operand1 = _mm512_loadu_pd(tmp0);
         operand2 = _mm512_loadu_pd(tmp1);
         operand3 = _mm512_sub_pd(operand1, operand2); // p - t
         _mm512_storeu_pd(tmp0, operand3);             // p - t
-        operand1 = _mm512_loadu_pd(tmp0);
+        tmp0[c] *= 2;                                 // differential
         operand3 = _mm512_mul_pd(operand3, operand3); // pow 2
-        _mm512_storeu_pd(tmp2, operand3);
+        *total = _mm512_reduce_add_pd(operand3);
         tmp0 += DOUBLE_REGISTER_COUNT;
         tmp1 += DOUBLE_REGISTER_COUNT;
-        tmp2 += DOUBLE_REGISTER_COUNT;
     }
     return 0;
 }
 
-unsigned char scalar_X_matrix_double(unsigned long count, double *m_inout, double *s)
+unsigned char scalar_X_matrix_double(unsigned long count, double *m_inout, double *s, double *ret)
 {
     __m512d operand1 = _mm512_setzero_pd();
     __m512d operand2 = _mm512_setzero_pd();
@@ -245,13 +159,21 @@ unsigned char scalar_X_matrix_double(unsigned long count, double *m_inout, doubl
     {
         operand1 = _mm512_loadu_pd(tmp0);
         operand1 = _mm512_mul_pd(operand1, operand2);
-        _mm512_storeu_pd(tmp0, operand1);
+        if (ret == NULL)
+        {
+            _mm512_storeu_pd(tmp0, operand1);
+        }
+        else
+        {
+            _mm512_storeu_pd(ret, operand1);
+            ret += DOUBLE_REGISTER_COUNT;
+        }
         tmp0 += DOUBLE_REGISTER_COUNT;
     }
     return 0;
 }
 
-unsigned char convolve_2d_double(unsigned long w, unsigned long h, unsigned long k, unsigned long o_w, unsigned long count, unsigned short p, unsigned short s, double *hXw, double *kXk, double *out)
+unsigned char convolve_2d_double(unsigned long w, unsigned long h, unsigned long k, unsigned long o_w, unsigned long count, unsigned short p, unsigned short s, double *hXw, double *kXk, double *previous, double *learning_rate, double *out)
 {
     unsigned long idx = 0;
     unsigned long updated_w = w;
@@ -294,6 +216,10 @@ unsigned char convolve_2d_double(unsigned long w, unsigned long h, unsigned long
             }
             HxW = updated_hXw + (updated_w * w_counter) + s * k_counter;
             KxK = kXk;
+            if (previous != NULL)
+            {
+                out[idx] = previous[idx] - learning_rate[0] * out[idx];
+            }
             idx = c / (k * register_reset_trigger);
             register_reset_counter = register_reset_trigger;
         }
@@ -345,6 +271,11 @@ unsigned char convolve_2d_double(unsigned long w, unsigned long h, unsigned long
                 register_reset_counter = register_reset_trigger;
             }
         }
+    }
+    //last idx ALREADY set up in loop
+    if (previous != NULL)
+    {
+        out[idx] = previous[idx] - learning_rate[0] * out[idx];
     }
     free(working);
     if (p != 0)
