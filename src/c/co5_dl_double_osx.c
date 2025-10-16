@@ -52,7 +52,7 @@ unsigned char dot_product_double(unsigned long n, unsigned long d, unsigned long
         }
         operand3 = _mm512_loadu_pd(working);
         out[idx] += _mm512_reduce_add_pd(operand3);
-        out[idx] += b[(idx % d)];
+        // out[idx] += b[(idx % d)];
         if (d < DOUBLE_REGISTER_COUNT)
         {
             DxM += d;
@@ -80,7 +80,7 @@ unsigned char dot_product_double(unsigned long n, unsigned long d, unsigned long
     return 0;
 }
 
-unsigned char linear_sgd_double(unsigned long n, unsigned long d, unsigned long m, double *learning_rate, double *y, double *derivative, double *previous, double *out)
+unsigned char linear_sgd_double(unsigned long n, unsigned long d, unsigned long m, double *learning_rate, double *weight_gradients, double *weights, double *loss_gradient, double *backward_weight_gradients)
 {
     // The correct calculation will come from finding if d == 1 or not
     // if d != 1 then register pointer moves will come from d. If not then n == m
@@ -92,33 +92,29 @@ unsigned char linear_sgd_double(unsigned long n, unsigned long d, unsigned long 
     unsigned long count = d != 1 ? n * m * register_reset_trigger : register_reset_trigger;
     unsigned long offset;
 
-    __m512d predicted_s = _mm512_setzero_pd();
-    __m512d differential_s = _mm512_setzero_pd();
-    __m512d operand3 = _mm512_setzero_pd();
+    __m512d weight_gradients_s = _mm512_setzero_pd();
+    __m512d weights_s = _mm512_setzero_pd();
+    __m512d backward_weight_gradients_s = _mm512_setzero_pd();
     __m512d learning_rate_s = _mm512_loadu_pd(learning_rate);
-    double *predicted = y;
-    double *differential = derivative;
-    double *working = malloc(sizeof(double) * DOUBLE_REGISTER_COUNT);
+    __m512d loss_gradient_s = _mm512_loadu_pd(loss_gradient);
 
-    if (working == NULL)
-    {
-        return 1;
-    }
+    double *weight_gradients_pointer = weight_gradients;
+    double *weights_pointer = weights;
+    double *loss_gradient_pointer = loss_gradient;
+    double *backward_weight_gradients_pointer = backward_weight_gradients;
 
     for (unsigned long c = 0; c < count; c++)
     {
-        memset(working, 0, sizeof(double) * DOUBLE_REGISTER_COUNT);
-        predicted_s = _mm512_loadu_pd(predicted);
-        differential_s = _mm512_loadu_pd(differential);
-        operand3 = _mm512_loadu_pd(working);
-        operand3 = _mm512_mul_pd(learning_rate_s, differential_s);
-        operand3 = _mm512_sub_pd(predicted_s, operand3);
-        _mm512_storeu_pd(out, operand3);
-        predicted += DOUBLE_REGISTER_COUNT;
-        differential += DOUBLE_REGISTER_COUNT;
-        out += DOUBLE_REGISTER_COUNT;
+        weight_gradients_s = _mm512_loadu_pd(weight_gradients_pointer);
+        weights_s = _mm512_loadu_pd(weights_pointer);
+        weights_s = _mm512_fmsub_pd(weight_gradients_s, learning_rate_s, weights_s);
+        backward_weight_gradients_s = _mm512_mul_pd(weight_gradients_s, loss_gradient_s);
+        _mm512_storeu_pd(backward_weight_gradients_pointer, backward_weight_gradients_s);
+        _mm512_storeu_pd(weights_pointer, weights_s);
+        weight_gradients_pointer += DOUBLE_REGISTER_COUNT;
+        weights_pointer += DOUBLE_REGISTER_COUNT;
+        backward_weight_gradients_pointer += DOUBLE_REGISTER_COUNT;
     }
-    free(working);
     return 0;
 }
 
