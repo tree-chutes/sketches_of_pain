@@ -2,7 +2,7 @@
 
 use super::layers::Layer;
 use super::register::REGISTER_WIDTH;
-use super::{activation_functions::Activation, aggregator_functions::Aggregator};
+use super::aggregator_functions::Aggregator;
 use num_traits::Float;
 use std::ffi::{c_double, c_float, c_uchar, c_ulong, c_ushort};
 use std::ptr;
@@ -42,6 +42,7 @@ unsafe extern "C" {
 }
 
 pub(super) struct Conv2D<F: Float> {
+    pub(super) is_first_layer: bool,
     pub(super) zero: F,
     pub(super) h: usize,
     pub(super) w: usize,
@@ -53,69 +54,68 @@ pub(super) struct Conv2D<F: Float> {
 }
 
 impl<F: Float> Layer<F> for Conv2D<F> {
+
+    fn set_first_layer_flag(&mut self) {
+        self.is_first_layer = true;
+    }
+
     fn flatten(
-        &mut self,
+        &self,
         mut f: Vec<Vec<F>>,
-        mut k: Vec<Vec<F>>,
+        k: Vec<Vec<F>>,
         b: Vec<Vec<F>>,
     ) -> (Vec<F>, Vec<F>, Vec<F>) {
         assert!(f.len() != 0);
         assert!(f[0].len() != 0);
-        assert!(k.len() != 0);
-        assert!(k[0].len() != 0);
-        assert!(k.len() == k[0].len());
         assert!(f.len() >= k.len());
         assert!(f[0].len() >= k.len());
 
         let check_f = f[0].len();
-        let check_k = k.len();
-        let mut f1: Vec<F> = vec![];
-        let mut k1: Vec<F> = vec![];
+        let mut ret_feature: Vec<F> = vec![];
 
-        if self.h == 0 {
-            self.h = f.len();
-            self.w = f[0].len();
-            self.k = k.len();
-            assert!(self.s as usize <= self.w - self.k);
-            self.w_out = (self.w - self.k + 2 * self.p as usize) / self.s as usize + 1;
-            self.h_out = (self.h - self.k + 2 * self.p as usize) / self.s as usize + 1;
-            
-        } else {
-            assert!(self.h == f.len());
-            assert!(self.w == f[0].len());
-            assert!(self.k == k.len());
-        }
+        assert!(self.h == f.len());
+        assert!(self.w == f[0].len());
 
         for idx in 0..f.len() {
             if f[idx].len() != check_f {
                 panic!("F out of shape: {}", idx)
             }
-            f1.append(&mut f[idx]);
+            ret_feature.append(&mut f[idx]);
         }
 
-        f1.resize(
-            f1.len() + (REGISTER_WIDTH / (size_of::<F>() * 8))
-                - f1.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
+        ret_feature.resize(
+            ret_feature.len() + (REGISTER_WIDTH / (size_of::<F>() * 8))
+                - ret_feature.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
             self.zero,
         );
+        (ret_feature, self.flatten_kernel(k), vec![])
+    }
+
+    fn flatten_kernel(&self, mut k: Vec<Vec<F>>) -> Vec<F> {
+        assert!(k.len() != 0);
+        assert!(k[0].len() != 0);
+        assert!(k.len() == k[0].len());
+        let check_k = k.len();
+        let mut ret_kernel: Vec<F> = vec![];
+
         for idx in 0..k.len() {
             if k[idx].len() != check_k {
                 panic!("K out of shape: {}", idx)
             }
-            k1.append(&mut k[idx]);
+            ret_kernel.append(&mut k[idx]);
         }
-        k1.resize(
-            k1.len() + (REGISTER_WIDTH / (size_of::<F>() * 8))
-                - k1.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
+        ret_kernel.resize(
+            ret_kernel.len() + (REGISTER_WIDTH / (size_of::<F>() * 8))
+                - ret_kernel.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
             self.zero,
         );
-        (f1, k1, vec![])
+        ret_kernel
     }
 
     fn forward(
         &self,
         mut data: (&[F], &mut [F], &[F]),
-        a: Option<Box<dyn Aggregator<F>>>,
+        _a: Option<Box<dyn Aggregator<F>>>,
     ) -> Vec<F> {
         let feature_len: usize = self.h * self.w + (REGISTER_WIDTH / (size_of::<F>() * 8))
             - self.h * self.w % (REGISTER_WIDTH / (size_of::<F>() * 8));
@@ -127,15 +127,15 @@ impl<F: Float> Layer<F> for Conv2D<F> {
         self.execute_forward(&mut data.0, data.1)
     }
 
-    fn backward(&self, d: (&mut [F], &mut [F], &[F]), z: &mut [F], l_r: F ) -> (Vec<F>, Vec<F>, Vec<F>) {
+    fn backward(&self, d: (&mut [F], &mut [F], &mut [F]), l_r: F, l: F) -> (Vec<F>, Vec<F>) {
         let kernel_len: usize = self.k * self.k + (REGISTER_WIDTH / (size_of::<F>() * 8))
             - self.k * self.k % (REGISTER_WIDTH / (size_of::<F>() * 8));
-        let out_len: usize = self.w_out * self.h_out + (REGISTER_WIDTH / (size_of::<F>() * 8))
+        let _out_len: usize = self.w_out * self.h_out + (REGISTER_WIDTH / (size_of::<F>() * 8))
             - self.w_out * self.h_out % (REGISTER_WIDTH / (size_of::<F>() * 8));
         assert!(d.1.len() == kernel_len);
-        assert!(z.len() == out_len);
+        // assert!(z.len() == out_len);
         let lr = [l_r];
-        self.execute_backward(d.0, d.1, z, &lr)
+        self.execute_backward(d.0, d.1, d.2, &lr)
     }
 
 }
@@ -177,14 +177,14 @@ impl<F: Float> Conv2D<F> {
         }
     }
 
-    fn execute_backward(&self, x: &[F], w: &mut [F], z: &mut [F], l_r: &[F] ) -> (Vec<F>, Vec<F>, Vec<F>) {
-        let padding = self.k - 1;
-        let ret_x: Vec<F> = vec![self.zero; self.h * self.w];
-        let ret_k: Vec<F> = vec![self.zero; self.k * self.k];
-        
-        unsafe {
+    fn execute_backward(&self, previous_z: &[F], backpropagated_weights: &mut [F], previous_weights: &mut [F], l_r: &[F] ) -> (Vec<F>, Vec<F>) {
+        let count = ((self.h_out - self.k + 2 * (self.h_out - 1))) / (self.s as usize) + 1;
+        let mut updated_kernel: Vec<F> = vec![self.zero; self.k * self.k];
+        let mut backward_gradients = vec![self.zero; self.h * self.w];
+
+        unsafe{
             if size_of::<F>() == 8 {
-                convolve_2d_double(
+                if convolve_2d_double(
                     self.w as c_ulong,
                     self.h as c_ulong,
                     self.w_out as c_ulong,
@@ -192,15 +192,17 @@ impl<F: Float> Conv2D<F> {
                     (self.k * self.k) as c_ulong,
                     0 as c_ushort,
                     self.s as c_ushort,
-                    x.as_ptr() as *const c_double,
-                    z.as_ptr() as *const c_double,
-                    ptr::null() as *const c_double, 
+                    previous_z.as_ptr() as *const c_double,                     
+                    backpropagated_weights.as_ptr() as *const c_double,
+                    previous_weights.as_ptr() as *const c_double,
                     l_r.as_ptr() as *const c_double,
-                    ret_k.as_ptr() as *mut c_double
-                );
+                    updated_kernel.as_ptr() as *mut c_double
+                ) != 0{
+                    panic!("conv2d double forward pass failed")
+                }
             }
             else{
-                convolve_2d_float(
+                if convolve_2d_float(
                     self.w as c_ulong,
                     self.h as c_ulong,
                     self.w_out as c_ulong,
@@ -208,50 +210,69 @@ impl<F: Float> Conv2D<F> {
                     (self.k * self.k) as c_ulong,
                     0 as c_ushort,
                     self.s as c_ushort,
-                    x.as_ptr() as *const c_float,
-                    z.as_ptr() as *const c_float,
-                    ptr::null() as *const c_float, 
+                    previous_z.as_ptr() as *const c_float,                     
+                    backpropagated_weights.as_ptr() as *const c_float,
+                    previous_weights.as_ptr() as *const c_float,
                     l_r.as_ptr() as *const c_float,
-                    ret_k.as_ptr() as *mut c_float
-                );
+                    updated_kernel.as_ptr() as *mut c_float
+                ) != 0{
+                    panic!("conv2d float forward pass failed")
+                }
             }
         }
-        self.flip_180(w, self.k, self.k);
-        unsafe {
-            if size_of::<F>() == 8 {
-                convolve_2d_double(
-                    self.w_out as c_ulong,
-                    self.h_out as c_ulong,
-                    self.k as c_ulong,
-                    self.w as c_ulong,
-                    (self.h * self.w) as c_ulong,
-                    padding as c_ushort,
-                    self.s as c_ushort,
-                    z.as_ptr() as *const c_double,
-                    w.as_ptr() as *const c_double,
-                    ptr::null() as *const c_double,
-                    l_r.as_ptr() as *const c_double,
-                    ret_x.as_ptr() as *mut c_double
-                );
-            }
-            else{
-                convolve_2d_float(
-                    self.w_out as c_ulong,
-                    self.h_out as c_ulong,
-                    self.k as c_ulong,
-                    self.w as c_ulong,
-                    (self.h * self.w) as c_ulong,
-                    padding as c_ushort,
-                    self.s as c_ushort,
-                    z.as_ptr() as *const c_float,
-                    w.as_ptr() as *const c_float,
-                    ptr::null() as *const c_float,
-                    l_r.as_ptr() as *const c_float,
-                    ret_x.as_ptr() as *mut c_float
-                );
+        if !self.is_first_layer{
+            self.flip_180(previous_weights, self.k, self.k);
+            unsafe {
+                if size_of::<F>() == 8 {
+                    if convolve_2d_double(
+                        self.w_out as c_ulong, //we are moving from k back to w
+                        self.h_out as c_ulong, //we are moving from k back to h
+                        self.k as c_ulong,
+                        self.w as c_ulong, //we are moving from k back to w
+                        (count * count) as c_ulong,
+                        (self.k - 1) as c_ushort,
+                        self.s as c_ushort,
+                        backpropagated_weights.as_ptr() as *const c_double,
+                        previous_weights.as_ptr() as *const c_double,                     
+                        ptr::null() as *const c_double,
+                        ptr::null() as *const c_double,
+                        backward_gradients.as_ptr() as *mut c_double
+                    ) != 0{
+                        panic!("conv2d double backward pass failed")
+                    }
+                }
+                else{
+                    if convolve_2d_float(
+                        self.w_out as c_ulong, //we are moving from k back to w
+                        self.h_out as c_ulong, //we are moving from k back to h
+                        self.k as c_ulong,
+                        self.w as c_ulong, //we are moving from k back to w
+                        (count * count) as c_ulong,
+                        (self.k - 1) as c_ushort,
+                        self.s as c_ushort,
+                        backpropagated_weights.as_ptr() as *const c_float,
+                        previous_weights.as_ptr() as *const c_float,                     
+                        ptr::null() as *const c_float,
+                        ptr::null() as *const c_float,
+                        backward_gradients.as_ptr() as *mut c_float
+                    ) != 0{
+                        panic!("conv2d float backward pass failed")
+                    }
+                }
             }
         }
-        (ret_x, ret_k, vec![])
+        updated_kernel.resize(
+            updated_kernel.len() + (REGISTER_WIDTH / (size_of::<F>() * 8)) - updated_kernel.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
+            self.zero,
+        );
+
+        if !self.is_first_layer{
+            backward_gradients.resize(
+                backward_gradients.len() + (REGISTER_WIDTH / (size_of::<F>() * 8)) - backward_gradients.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
+                self.zero,
+            );
+        }
+        (updated_kernel, backward_gradients)
     }
 
     fn execute_forward(&self, x: &[F], w: &mut [F]) -> Vec<F> {
