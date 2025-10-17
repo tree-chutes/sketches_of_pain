@@ -80,7 +80,7 @@ unsigned char dot_product_double(unsigned long n, unsigned long d, unsigned long
     return 0;
 }
 
-unsigned char linear_sgd_double(unsigned long n, unsigned long d, unsigned long m, double *learning_rate, double *weight_gradients, double *weights, double *loss_gradient, double *backward_weight_gradients)
+unsigned char linear_sgd_double(unsigned long n, unsigned long d, unsigned long m, double *learning_rate, double *weight_gradients, double *weights, double *loss_gradient, double *backpropagating_gradients)
 {
     // The correct calculation will come from finding if d == 1 or not
     // if d != 1 then register pointer moves will come from d. If not then n == m
@@ -94,77 +94,80 @@ unsigned char linear_sgd_double(unsigned long n, unsigned long d, unsigned long 
 
     __m512d weight_gradients_s = _mm512_setzero_pd();
     __m512d weights_s = _mm512_setzero_pd();
-    __m512d backward_weight_gradients_s = _mm512_setzero_pd();
+    __m512d backpropagating_gradients_s = _mm512_setzero_pd();
     __m512d learning_rate_s = _mm512_loadu_pd(learning_rate);
     __m512d loss_gradient_s = _mm512_loadu_pd(loss_gradient);
+    __m512i sign_mask_i = _mm512_set1_epi64(0x8000000000000000ULL);    
 
     double *weight_gradients_pointer = weight_gradients;
     double *weights_pointer = weights;
     double *loss_gradient_pointer = loss_gradient;
-    double *backward_weight_gradients_pointer = backward_weight_gradients;
+    double *backpropagating_gradients_pointer = backpropagating_gradients;
 
     for (unsigned long c = 0; c < count; c++)
     {
         weight_gradients_s = _mm512_loadu_pd(weight_gradients_pointer);
         weights_s = _mm512_loadu_pd(weights_pointer);
+        backpropagating_gradients_s = _mm512_mul_pd(weights_s, loss_gradient_s);
         weights_s = _mm512_fmsub_pd(weight_gradients_s, learning_rate_s, weights_s);
-        backward_weight_gradients_s = _mm512_mul_pd(weight_gradients_s, loss_gradient_s);
-        _mm512_storeu_pd(backward_weight_gradients_pointer, backward_weight_gradients_s);
+        weights_s = _mm512_castsi512_pd(_mm512_xor_si512(_mm512_castpd_si512(weights_s), sign_mask_i));
+        _mm512_storeu_pd(backpropagating_gradients_pointer, backpropagating_gradients_s);
         _mm512_storeu_pd(weights_pointer, weights_s);
         weight_gradients_pointer += DOUBLE_REGISTER_COUNT;
         weights_pointer += DOUBLE_REGISTER_COUNT;
-        backward_weight_gradients_pointer += DOUBLE_REGISTER_COUNT;
+        backpropagating_gradients_pointer += DOUBLE_REGISTER_COUNT;
     }
     return 0;
 }
 
-unsigned char squared_loss_double(unsigned long count, double *p, double *t, double *total)
+unsigned char squared_loss_double(unsigned long count, double *prediction, double *truth, double *total)
 {
-    __m512d operand1 = _mm512_setzero_pd();
-    __m512d operand2 = _mm512_setzero_pd();
-    __m512d operand3 = _mm512_setzero_pd();
+    __m512d prediction_s = _mm512_setzero_pd();
+    __m512d truth_s = _mm512_setzero_pd();
+    __m512d working_s = _mm512_setzero_pd();
 
-    double *tmp0 = p;
-    double *tmp1 = t;
-    // REMEMBER vectors are filled when flattened so can safely advance DOUBLE_REGISTER_COUNT
+    double *prediction_pointer = prediction;
+    double *truth_pointer = truth;
+    // REMEMBER vectors are filled when flattened so we can safely advance DOUBLE_REGISTER_COUNT
     count = count / DOUBLE_REGISTER_COUNT + (count % DOUBLE_REGISTER_COUNT != 0);
     for (unsigned long c = 0; c < count; c++)
     {
-        operand1 = _mm512_loadu_pd(tmp0);
-        operand2 = _mm512_loadu_pd(tmp1);
-        operand3 = _mm512_sub_pd(operand1, operand2); // p - t
-        _mm512_storeu_pd(tmp0, operand3);             // p - t
-        tmp0[c] *= 2;                                 // differential
-        operand3 = _mm512_mul_pd(operand3, operand3); // pow 2
-        *total = _mm512_reduce_add_pd(operand3);
-        tmp0 += DOUBLE_REGISTER_COUNT;
-        tmp1 += DOUBLE_REGISTER_COUNT;
+        prediction_s = _mm512_loadu_pd(prediction_pointer);
+        truth_s = _mm512_loadu_pd(truth_pointer);
+        working_s = _mm512_sub_pd(prediction_s, truth_s); // p - t
+        _mm512_storeu_pd(prediction_pointer, working_s);             // p - t
+        prediction_pointer[c] *= 2;                                 // differential
+        working_s = _mm512_mul_pd(working_s, working_s); // pow 2
+        *total = _mm512_reduce_add_pd(working_s);
+        prediction_pointer += DOUBLE_REGISTER_COUNT;
+        truth_pointer += DOUBLE_REGISTER_COUNT;
     }
     return 0;
 }
 
-unsigned char scalar_X_matrix_double(unsigned long count, double *m_inout, double *s, double *ret)
+unsigned char scalar_X_matrix_double(unsigned long count, double *m_inout, double *scalar, double *ret)
 {
-    __m512d operand1 = _mm512_setzero_pd();
-    __m512d operand2 = _mm512_setzero_pd();
+    __m512d m_inout_s = _mm512_setzero_pd();
+    __m512d scalar_s = _mm512_setzero_pd();
 
-    double *tmp0 = m_inout;
-    operand2 = _mm512_loadu_pd(s);
+    double *m_inout_pointer = m_inout;
+
+    scalar_s = _mm512_loadu_pd(scalar);
 
     for (unsigned long c = 0; c < count; c += DOUBLE_REGISTER_COUNT)
     {
-        operand1 = _mm512_loadu_pd(tmp0);
-        operand1 = _mm512_mul_pd(operand1, operand2);
+        m_inout_s = _mm512_loadu_pd(m_inout_pointer);
+        m_inout_s = _mm512_mul_pd(m_inout_s, scalar_s);
         if (ret == NULL)
         {
-            _mm512_storeu_pd(tmp0, operand1);
+            _mm512_storeu_pd(m_inout_pointer, m_inout_s);
         }
         else
         {
-            _mm512_storeu_pd(ret, operand1);
+            _mm512_storeu_pd(ret, m_inout_s);
             ret += DOUBLE_REGISTER_COUNT;
         }
-        tmp0 += DOUBLE_REGISTER_COUNT;
+        m_inout_pointer += DOUBLE_REGISTER_COUNT;
     }
     return 0;
 }
@@ -268,7 +271,7 @@ unsigned char convolve_2d_double(unsigned long w, unsigned long h, unsigned long
             }
         }
     }
-    //last idx ALREADY set up in loop
+    // last idx ALREADY set up in loop
     if (previous != NULL)
     {
         out[idx] = previous[idx] - learning_rate[0] * out[idx];
