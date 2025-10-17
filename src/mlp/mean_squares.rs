@@ -1,7 +1,9 @@
 //Copyright (c) 2025, tree-chutes
 
 use std::ffi::{c_double, c_float, c_uchar, c_ulong};
+use std::ptr;
 
+use super::register::REGISTER_WIDTH;
 use super::loss_functions::Loss;
 use num_traits::Float;
 
@@ -22,8 +24,8 @@ unsafe extern "C" {
         out: *const c_double,
     ) -> c_uchar;
 
-    unsafe fn scalar_X_matrix_double(c: c_ulong, m_inout: *const c_double, s: *const c_double)-> c_uchar;
-    unsafe fn scalar_X_matrix_float(c: c_ulong, m_inout: *const c_float, s: *const c_float)-> c_uchar;
+    unsafe fn scalar_X_matrix_double(c: c_ulong, m_inout: *const c_double, s: *const c_double, o: *const c_double)-> c_uchar;
+    unsafe fn scalar_X_matrix_float(c: c_ulong, m_inout: *const c_float, s: *const c_float, o: *const c_float)-> c_uchar;
 }
 
 pub(super) struct MeanSquares<F: Float> {
@@ -53,64 +55,63 @@ impl<F: Float> Loss<F> for MeanSquares<F> {
             ret.append(&mut t[idx]);
         }
         ret.resize(
-            ret.len() + (256 / (size_of::<F>() * 8)) - ret.len() % (256 / (size_of::<F>() * 8)),
+            ret.len() + (REGISTER_WIDTH / (size_of::<F>() * 8)) - ret.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
             self.one - self.one,
         );
         ret
     }
 
     fn forward(&self, t: &[F], p: &[F]) -> Vec<F> {
-        let truth_len: usize = self.n * self.m + (256 / (size_of::<F>() * 8))
-            - self.n * self.m % (256 / (size_of::<F>() * 8));
+        let truth_len: usize = self.n * self.m + (REGISTER_WIDTH / (size_of::<F>() * 8))
+            - self.n * self.m % (REGISTER_WIDTH / (size_of::<F>() * 8));
         assert!(t.len() == truth_len);
         assert!(p.len() == truth_len);
         self.execute_forward(t, p)
     }
-    fn backward(&self, dl: &[F]) {
-        let truth_len: usize = self.n * self.m + (256 / (size_of::<F>() * 8))
-            - self.n * self.m % (256 / (size_of::<F>() * 8));
-        assert!(dl.len() == truth_len);
-        self.execute_backward(dl)
+
+    fn backward(&self, loss: F, dl: &mut [F])-> Vec<F>{
+        self.execute_backward(loss,dl)
     }
 }
 
 impl<F: Float> MeanSquares<F> {
-    fn execute_backward(&self, dl: &[F]) {
-        let width = (256 / (size_of::<F>() * 8));        
+    fn execute_backward(&self, loss: F, dl: &mut [F])-> Vec<F>{
+        let width = REGISTER_WIDTH / (size_of::<F>() * 8);  
+        let backpropagating_gradients = vec![self.one; dl.len()];      
         unsafe {
             if size_of::<F>() == 8 {
-                let diff = 2.0 / (self.n * self.m) as f64;
                 if scalar_X_matrix_double(
                     dl.len() as c_ulong,
                     dl.as_ptr() as *const c_double,
-                    vec![diff; width].as_ptr() as *const c_double,
+                    vec![loss ; width].as_ptr() as *const c_double,
+                    backpropagating_gradients.as_ptr() as *const c_double
                 ) != 0{
                     panic!("can't dl")
                 }
             }
             else{
-                let diff = 2.0 / (self.n * self.m) as f32;
+                //let diff = 2.0 / (self.n * self.m) as f32;
                 if scalar_X_matrix_float(
                     dl.len() as c_ulong,
                     dl.as_ptr() as *const c_float,
-                    vec![diff; width].as_ptr() as *const c_float,
+                    vec![loss; width].as_ptr() as *const c_float,
+                    backpropagating_gradients.as_ptr() as *const c_float
                 ) != 0{
                     panic!("can't dl")
                 }
-
             }
         }
+        backpropagating_gradients
     }
 
     fn execute_forward(&self, t: &[F], p: &[F]) -> Vec<F> {
         let zero = self.one - self.one;
-        let mut loss = zero;
-        let mut total = zero;
-        let ret = vec![self.one - self.one; p.len()];
+        let total = self.n * self.m;
+        let ret: Vec<F> = vec![zero; total];
         unsafe {
             if size_of::<F>() == 8 {
                 if squared_loss_double(
-                    p.len() as c_ulong,
+                    total as c_ulong,
                     p.as_ptr() as *const c_double,
                     t.as_ptr() as *const c_double,
                     ret.as_ptr() as *const c_double,
@@ -130,12 +131,6 @@ impl<F: Float> MeanSquares<F> {
                 }
             }
         }
-        ret.iter().for_each(|l| {
-            if *l != zero {
-                loss = loss + *l;
-                total = total + self.one;
-            }
-        });
-        vec![loss / total]
+        ret
     }
 }
