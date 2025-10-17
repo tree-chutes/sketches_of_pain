@@ -1,10 +1,13 @@
 //Copyright (c) 2025, tree-chutes
 
-use super::register::REGISTER_WIDTH;
 use super::layers::Layer;
-use super::{activation_functions::Activation, aggregator_functions::Aggregator};
+use super::register::REGISTER_WIDTH;
+use super::aggregator_functions::Aggregator;
 use num_traits::Float;
-use std::{ptr,ffi::{c_double, c_float, c_uchar, c_ulong}};
+use std::{
+    ffi::{c_double, c_float, c_uchar, c_ulong},
+    ptr,
+};
 
 #[link(name = "co5_dl_c", kind = "static")]
 #[allow(improper_ctypes)]
@@ -16,8 +19,8 @@ unsafe extern "C" {
         nXd: *const c_double,
         dXm: *const c_double,
         b: *const c_double,
-        out: *const c_double
-    );
+        out: *const c_double,
+    ) -> c_uchar;
 
     fn dot_product_float(
         n: c_ulong,
@@ -26,29 +29,29 @@ unsafe extern "C" {
         nXd: *const c_float,
         dXm: *const c_float,
         b: *const c_float,
-        out: *const c_float
-    );
+        out: *const c_float,
+    )-> c_uchar;
 
-    fn differentiate_double(
+    fn linear_sgd_double(
         n: c_ulong,
         d: c_ulong,
         m: c_ulong,
-        l_r: *const c_double,
-        nXd: *const c_double,
-        dXm: *const c_double,
-        p: *const c_double,
-        out: *const c_double
+        learning_rate: *const c_double,
+        weight_gradients: *const c_double,
+        weights: *const c_double,
+        loss_gradient: *const c_double,
+        backpropagating_gradients: *const c_double
     ) -> c_uchar;
 
-    fn differentiate_float(
+    fn linear_sgd_float(
         n: c_ulong,
         d: c_ulong,
         m: c_ulong,
-        l_r: *const c_float,
-        nXd: *const c_float,
-        dXm: *const c_float,
-        p: *const c_float,
-        out: *const c_float
+        learning_rate: *const c_float,
+        weight_gradients: *const c_float,
+        weights: *const c_float,
+        loss_gradient: *const c_float,
+        backpropagating_gradients: *const c_float,
     ) -> c_uchar;
 }
 
@@ -57,69 +60,80 @@ pub(super) struct LinearLayer<F: Float> {
     pub(super) d: usize,
     pub(super) m: usize,
     pub(super) n: usize,
+    pub(super) is_first_layer: bool
 }
 
 impl<F: Float> Layer<F> for LinearLayer<F> {
+
+    fn set_first_layer_flag(&mut self) {
+        self.is_first_layer = true;
+    }
+
     fn flatten(
-        &mut self,
+        &self,
         mut x: Vec<Vec<F>>,
-        mut w: Vec<Vec<F>>,
+        w: Vec<Vec<F>>,
         mut b: Vec<Vec<F>>,
     ) -> (Vec<F>, Vec<F>, Vec<F>) {
         assert!(x.len() != 0);
         assert!(x[0].len() != 0);
-        assert!(w.len() != 0); 
-        assert!(w[0].len() != 0); //D
         assert!(x[0].len() == w.len()); //D
         assert!(b.len() == x.len());
-        assert!(b[0].len() == w[0].len());
-        let mut x1 = Vec::<F>::new();
-        let mut w1 = Vec::<F>::new();
+        assert!(b[0].len() == x[0].len());
+        let mut ret_x = Vec::<F>::new();
         let mut b1 = Vec::<F>::new();
-        let mut check = x[0].len();
+        let check = x[0].len();
 
-        if self.d == 0 {
-            self.n = x.len();
-            self.d = x[0].len();
-            self.m = w[0].len();
-        } else {
-            assert!(self.n == x.len());
-            assert!(self.d == x[0].len());
-            assert!(self.m == w[0].len());
-        }
+        assert!(self.n == x.len());
+        assert!(self.d == x[0].len());
+//        assert!(self.m == w[0].len());
+
         for idx in 0..x.len() {
             if x[idx].len() != check {
                 panic!("X out of shape: {}", idx)
             }
-            x1.append(&mut x[idx]);
+            ret_x.append(&mut x[idx]);
         }
-        x1.resize(
-            x1.len() + (REGISTER_WIDTH / (size_of::<F>() * 8)) - x1.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
+        ret_x.resize(
+            ret_x.len() + (REGISTER_WIDTH / (size_of::<F>() * 8))
+                - ret_x.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
             self.zero,
         );
-        check = w[0].len();
+        for idx in 0..b.len() {
+            // if b[idx].len() != check {
+            //     panic!("W out of shape: {}", idx)
+            // }
+            b1.append(&mut b[idx]);
+        }
+        b1.resize(
+            b1.len() + (REGISTER_WIDTH / (size_of::<F>() * 8))
+                - b1.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
+            self.zero,
+        );
+
+        (ret_x, self.flatten_kernel(w), b1)
+    }
+
+    fn flatten_kernel(&self, mut w: Vec<Vec<F>>) -> Vec<F> {
+        assert!(w.len() != 0);
+        assert!(w[0].len() != 0); //D
+        assert!(self.d == w.len());
+        assert!(self.m == w[0].len());        
+        let check = w[0].len();
+        let mut ret_w = vec![];
+
         for idx in 0..w.len() {
             if w[idx].len() != check {
                 panic!("W out of shape: {}", idx)
             }
-            w1.append(&mut w[idx]);
+            ret_w.append(&mut w[idx]);
         }
-        w1.resize(
-            w1.len() + (REGISTER_WIDTH / (size_of::<F>() * 8)) - w1.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
+        ret_w.resize(
+            ret_w.len() + (REGISTER_WIDTH / (size_of::<F>() * 8))
+                - ret_w.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
             self.zero,
         );
-        for idx in 0..b.len() {
-            if b[idx].len() != check {
-                panic!("W out of shape: {}", idx)
-            }
-            b1.append(&mut b[idx]);
-        }
-        b1.resize(
-            b1.len() + (REGISTER_WIDTH / (size_of::<F>() * 8)) - b1.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
-            self.zero,
-        );
-
-        (x1, w1, b1)
+        ret_w
     }
 
     fn forward(&self, mut d: (&[F], &mut [F], &[F]), _a: Option<Box<dyn Aggregator<F>>>) -> Vec<F> {
@@ -127,32 +141,32 @@ impl<F: Float> Layer<F> for LinearLayer<F> {
             - self.n * self.d % (REGISTER_WIDTH / (size_of::<F>() * 8));
         let weights_len: usize = self.d * self.m + (REGISTER_WIDTH / (size_of::<F>() * 8))
             - self.d * self.m % (REGISTER_WIDTH / (size_of::<F>() * 8));
-        let biases_len: usize = self.n * self.m + (REGISTER_WIDTH / (size_of::<F>() * 8))
+        let _biases_len: usize = self.n * self.m + (REGISTER_WIDTH / (size_of::<F>() * 8))
             - self.n * self.m % (REGISTER_WIDTH / (size_of::<F>() * 8));
 
-        if  d.0.len() != data_len ||
-            d.1.len() != weights_len ||
-            d.2.len() != biases_len{
-                return vec![];
-            }
+        if d.0.len() != data_len || d.1.len() != weights_len /*|| d.2.len() != data_len*/ {
+            return vec![];
+        }
         self.execute_forward(&mut d.0, d.1, &d.2)
     }
 
-    fn backward(&self, d: (&mut [F], &mut [F], &[F]), z: &mut [F], l_r: F) -> (Vec<F>, Vec<F>, Vec<F>) {
+    fn backward(
+        &self,
+        d: (&mut [F], &mut [F], &mut [F]),
+        l_r: F,
+        l: F,
+    ) -> (Vec<F>, Vec<F>) {
         let data_len: usize = self.n * self.d + (REGISTER_WIDTH / (size_of::<F>() * 8))
             - self.n * self.d % (REGISTER_WIDTH / (size_of::<F>() * 8));
         let weights_len: usize = self.d * self.m + (REGISTER_WIDTH / (size_of::<F>() * 8))
             - self.d * self.m % (REGISTER_WIDTH / (size_of::<F>() * 8));
-        let biases_len: usize = self.n * self.m + (REGISTER_WIDTH / (size_of::<F>() * 8))
+        let _biases_len: usize = self.n * self.m + (REGISTER_WIDTH / (size_of::<F>() * 8))
             - self.n * self.m % (REGISTER_WIDTH / (size_of::<F>() * 8));
 
-        if  d.0.len() != data_len ||
-            d.1.len() != weights_len ||
-            d.2.len() != biases_len ||
-            z.len() != biases_len{
-                return (vec![], vec![], vec![]);
+        if d.0.len() != data_len || d.1.len() != weights_len || d.2.len() != weights_len {
+            return (vec![], vec![]);
         }
-        self.execute_backward(d.0, d.1, d.2, z, l_r)
+        self.execute_backward(d.0, d.1, d.2, l_r, l)
     }
 }
 
@@ -166,9 +180,9 @@ impl<F: Float> LinearLayer<F> {
             // i = c % d;
             // j = c / d;
             idx0 = (c % d) * n + (c / d);
-            transposed[idx0] =  m[c];
+            transposed[idx0] = m[c];
         }
-        unsafe{
+        unsafe {
             ptr::copy_nonoverlapping(transposed.as_ptr(), m.as_mut_ptr(), len);
         }
     }
@@ -180,7 +194,7 @@ impl<F: Float> LinearLayer<F> {
 
         unsafe {
             if size_of::<F>() == 8 {
-                dot_product_double(
+                if dot_product_double(
                     self.n as c_ulong,
                     self.d as c_ulong,
                     self.m as c_ulong,
@@ -188,86 +202,73 @@ impl<F: Float> LinearLayer<F> {
                     w.as_ptr() as *const c_double,
                     b.as_ptr() as *const c_double,
                     ret.as_ptr() as *const c_double,
-                );
+                ) != 0{
+                    panic!("linear double forward pass failed")
+                }
             } else {
-                dot_product_float(
+                if dot_product_float(
                     self.n as c_ulong,
                     self.d as c_ulong,
                     self.m as c_ulong,
-                    x.as_ptr() as *const c_float,
                     w.as_ptr() as *const c_float,
+                    x.as_ptr() as *const c_float,
                     b.as_ptr() as *const c_float,
                     ret.as_ptr() as *const c_float,
-                );
+                ) != 0{
+                    panic!("linear float forward pass failed")
+                }
             }
         }
         ret.resize(
-            ret.len() + (REGISTER_WIDTH / (size_of::<F>() * 8)) - ret.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
+            ret.len() + (REGISTER_WIDTH / (size_of::<F>() * 8))
+                - ret.len() % (REGISTER_WIDTH / (size_of::<F>() * 8)),
             self.zero,
         );
         ret
     }
 
-    fn execute_backward(&self, x: &mut [F], w: &mut [F], b: &[F], z: &mut [F], l_r: F) -> (Vec<F>, Vec<F>, Vec<F>) {
-        let ret_w = vec![self.zero; self.d * self.m];
-        let ret_x = vec![self.zero; self.d * self.n];
-        let learning_rate = vec![l_r; REGISTER_WIDTH / (size_of::<F>() * 8)]; 
+    fn execute_backward(
+        &self,
+        weight_gradients: &mut [F],
+        weights: &mut [F],
+        _bias: &[F],
+        l_r: F,
+        l: F,
+    ) -> (Vec<F>, Vec<F>) {
+        let out_len = self.d * self.m + (REGISTER_WIDTH / (size_of::<F>() * 8)) - self.d * self.m % (REGISTER_WIDTH / (size_of::<F>() * 8));
+        let backward_gradients = vec![self.zero; out_len];
+        let learning_rate = vec![l_r; (REGISTER_WIDTH / (size_of::<F>() * 8))];
+        let loss_gradient = vec![l; (REGISTER_WIDTH / (size_of::<F>() * 8))];
 
-        self.transpose(x, self.n, self.d);
-        self.transpose(w, self.m, self.d);
-        self.transpose(z, self.n, self.m);
         unsafe {
             if size_of::<F>() == 4 {
-                differentiate_float(
+                if linear_sgd_float(
                     self.d as c_ulong,
                     self.m as c_ulong,
                     self.n as c_ulong,
                     learning_rate.as_ptr() as *const c_float,
-                    x.as_ptr() as *const c_float,
-                    z.as_ptr() as *const c_float,                                         
-                    w.as_ptr() as *const c_float,
-                    ret_w.as_ptr() as *const c_float,
-                );
-            }
-            else{
-                differentiate_double(
+                    weight_gradients.as_ptr() as *const c_float,
+                    weights.as_ptr() as *const c_float,
+                    loss_gradient.as_ptr() as *const c_float,
+                    backward_gradients.as_ptr() as *const c_float,
+                ) != 0{
+                    panic!("linear float backpass failed")
+                }
+            } else {
+                if linear_sgd_double(
+                    self.n as c_ulong,
                     self.d as c_ulong,
                     self.m as c_ulong,
-                    self.n as c_ulong,
                     learning_rate.as_ptr() as *const c_double,
-                    x.as_ptr() as *const c_double,
-                    z.as_ptr() as *const c_double,                                         
-                    w.as_ptr() as *const c_double,
-                    ret_w.as_ptr() as *const c_double,
-                );                
-            }
-            self.transpose(x, self.d, self.n);
-            self.transpose(w, self.d, self.m);
-            if size_of::<F>() == 4 {
-                differentiate_float(
-                    self.d as c_ulong,
-                    self.m as c_ulong,
-                    self.n as c_ulong,
-                    learning_rate.as_ptr() as *const c_float,
-                    z.as_ptr() as *const c_float,
-                    w.as_ptr() as *const c_float,                                         
-                    x.as_ptr() as *const c_float,
-                    ret_x.as_ptr() as *const c_float,
-                );        
-            }
-            else{
-                differentiate_double(
-                    self.d as c_ulong,
-                    self.m as c_ulong,
-                    self.n as c_ulong,
-                    learning_rate.as_ptr() as *const c_double,
-                    z.as_ptr() as *const c_double,
-                    w.as_ptr() as *const c_double,                                         
-                    x.as_ptr() as *const c_double,
-                    ret_x.as_ptr() as *const c_double,
-                );        
+                    weight_gradients.as_ptr() as *const c_double,
+                    weights.as_ptr() as *const c_double,
+                    loss_gradient.as_ptr() as *const c_double,
+                    backward_gradients.as_ptr() as *const c_double,
+                ) != 0{
+                    panic!("linear double backpass failed")
+                }
             }
         }
-        (ret_x, ret_w, z.to_vec())
+        (backward_gradients, vec![])
     }
 }
