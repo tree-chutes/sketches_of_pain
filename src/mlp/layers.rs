@@ -1,9 +1,9 @@
 //Copyright (c) 2025, tree-chutes
 
 use super::activation_functions::Activation;
+use super::aggregator_functions::Aggregator;
 use super::conv2d::Conv2D;
-use super::linear::Linear;
-use super::softmax::Softmax;
+use super::linear_layer::LinearLayer;
 use num_traits::Float;
 
 pub enum Layers {
@@ -13,65 +13,62 @@ pub enum Layers {
 }
 
 pub trait Layer<F: Float> {
-    fn forward(&self, w: &[F], f: &[F], b: F)-> Vec<F>;
-    fn differential(&self, s: &[F], p: &[F]) -> Vec<F> {
-        panic!("Should NOT be called");
+    fn set_first_layer_flag(&mut self);
+
+    fn forward(&self, d: (&[F], &mut [F], &[F]), a: Option<Box<dyn Aggregator<F>>>)-> Vec<F>;
+
+    fn flatten(&self, x: Vec<Vec<F>>, w: Vec<Vec<F>>, b: Vec<Vec<F>>) -> (Vec<F>, Vec<F>, Vec<F>){
+        todo!("Complete me");
     }
-    fn get_output_shape(&self) -> usize {
-        println!("NOT Required");
-        0
+
+    fn flatten_kernel(&self, k: Vec<Vec<F>>) -> Vec<F>{
+        todo!("Complete me");
+    }
+
+    fn backward(&self, d: (&mut [F], &mut [F], &mut [F]), l_r: F, l: F) -> (Vec<F>, Vec<F>) {
+        panic!("Should NOT be called");
     }
 }
 
 pub fn layer_factory<F: Float + 'static>(
     l: Layers,
-    w: Vec<Vec<F>>,
     n: usize,
-    s: F,
-    o: F,
-    a: Option<Box<dyn Activation<F>>>,
-) -> (Vec<F>, Vec<(usize, usize)>, Box<dyn Layer<F>>) {
-    let m: usize;
-    let d = w.len();
-    assert!(d != 0);
-    m = w[0].len();
-    w.iter().for_each(|r| assert!(r.len() == m));
-
+    d: usize,
+    m: usize,
+    c: Option<(u16, u16)>,    
+    z: F
+) -> Box<dyn Layer<F>> {
     match l {
         Layers::Linear => {
-            assert!(w.len() == n);
-            let mut l1 = Linear {
-                fill: 0,
+            let mut ret = LinearLayer {
                 d: d,
                 m: m,
                 n: n,
-                zero: s,
-                a: a.unwrap(),
-                activations: vec![s; n * m],
+                zero: z,
+                is_first_layer: false
             };        
-            (
-                l1.flatten_weights(w),
-                l1.generate_input_mapping(),
-                Box::new(l1)
-            )
-        }
+            Box::new(ret)
+        },
         Layers::Conv2D =>{
-            let o = n - w.len() + 1;
-            let w1 = w.len();        
-            let mut l1 = Conv2D {
-                fill: 0,
-                i: n,
-                d: w1,
-                output_shape: o * o,
-                zero: s,
-                a: a.unwrap(),
-                activations: vec![s; o * o]
-            };        
-            (
-                l1.flatten_weights(w),
-                l1.generate_input_mapping(),
-                Box::new(l1)
-            )
+            let (padding, step) = c.unwrap();
+            assert!(step > 0);
+            assert!(step as usize <= n - d);
+
+            let mut ret = Conv2D {
+                h: n,
+                w: m,
+                k: d,
+                p: padding,
+                s: step,
+                h_out: 0,
+                w_out: 0,
+                zero: z,
+                is_first_layer: false
+            };   
+            ret.w_out = (ret.w - ret.k + 2 * ret.p as usize) / ret.s as usize + 1;
+            ret.h_out = (ret.h - ret.k + 2 * ret.p as usize) / ret.s as usize + 1;
+     
+            Box::new(ret)
         }
         _ => todo!(),
     }
