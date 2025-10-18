@@ -16,10 +16,252 @@ mod softmax;
 
 #[cfg(test)]
 mod tests {
+
     use super::{
         layers::{Layers, layer_factory},
         loss_functions::{LossFunctions, loss_function_factory},
     };
+
+    #[test]
+    fn test_18_x_18_f64() {
+        let mut x: Vec<Vec<f64>> = vec![vec![
+            0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7,
+            1.8,
+        ]];
+        let w: Vec<Vec<f64>> = vec![
+            vec![0.1],
+            vec![0.2],
+            vec![0.3],
+            vec![0.4],
+            vec![0.5],
+            vec![0.6],
+            vec![0.7],
+            vec![0.8],
+            vec![0.9],
+            vec![0.1],
+            vec![0.2],
+            vec![0.3],
+            vec![0.4],
+            vec![0.5],
+            vec![0.6],
+            vec![0.7],
+            vec![0.8],
+            vec![0.9],
+        ];
+        let y = vec![vec![2.0]];
+        let l = layer_factory::<f64>(
+            Layers::Linear,
+            1, //configuration value. Vector already flattened from previous layer
+            x[0].len(),
+            1, //configuration value. Vector already flattened from previous layer
+            None,
+            0.0,
+        );
+        let b = vec![];
+
+        let LINEAR_OUTPUT = [9.75];
+        let LOSS = [60.0625];
+        let GRADIENTS_FROM_LINEAR_TO_PREVIOUS = [
+            1.55,
+            3.1,
+            4.6499999999999995,
+            6.2,
+            7.75,
+            9.299999999999999,
+            10.85,
+            12.4,
+            13.950000000000001,
+            1.55,
+            3.1,
+            4.6499999999999995,
+            6.2,
+            7.75,
+            9.299999999999999,
+            10.85,
+            12.4,
+            13.950000000000001,
+        ];
+        let LINEAR_UPDATED_WEIGHTS = [
+            0.0845,
+            0.169,
+            0.2535,
+            0.338,
+            0.4225,
+            0.507,
+            0.5914999999999999,
+            0.676,
+            0.7605,
+            -0.055,
+            0.029500000000000002,
+            0.114,
+            0.1985,
+            0.28300000000000003,
+            0.3675,
+            0.45199999999999996,
+            0.5365000000000001,
+            0.621,
+        ];
+
+        let (mut flat_x, mut flat_w, mut flat_b) = l.flatten(x, w, b);
+        let forward_linear = (flat_x.as_slice(), flat_w.as_mut_slice(), flat_b.as_slice());
+        let mut z_linear: Vec<f64> = l.forward(forward_linear, None);
+        assert!(
+            LINEAR_OUTPUT[0] - z_linear[0] < f64::EPSILON,
+            "LINEAR_OUTPUT truth {} prediction {}",
+            LINEAR_OUTPUT[0],
+            z_linear[0]
+        );
+        let (flat_y, squared) = loss_function_factory(LossFunctions::MeanSquares, y, 1.0);
+        let loss = squared.forward(&flat_y, &z_linear);
+        assert!(
+            LOSS[0] - loss[0] < f64::EPSILON,
+            "LOSS truth {} prediction {}",
+            LOSS[0],
+            loss[0]
+        );
+        let mut from_loss_to_linear_grads = squared.backward(z_linear[0], &mut flat_x);
+        let l_backward = (
+            from_loss_to_linear_grads.as_mut_slice(),
+            flat_w.as_mut_slice(),
+            flat_x.as_mut_slice(),
+        );
+
+        let (from_linear_to_previous_grads, _dummy_bias) =
+            l.backward(l_backward, 0.01, z_linear[0]);
+
+        for i in 0..GRADIENTS_FROM_LINEAR_TO_PREVIOUS.len() {
+            assert!(
+                (GRADIENTS_FROM_LINEAR_TO_PREVIOUS[i] - from_linear_to_previous_grads[i]).abs()
+                    < f64::EPSILON,
+                "GRADIENTS_FROM_LINEAR_TO_PREVIOUS {} truth {} prediction {}",
+                i,
+                GRADIENTS_FROM_LINEAR_TO_PREVIOUS[i],
+                from_linear_to_previous_grads[i]
+            );
+        }
+        for i in 0..LINEAR_UPDATED_WEIGHTS.len() {
+            assert!(
+                (LINEAR_UPDATED_WEIGHTS[i] - flat_w[i]).abs() < f64::EPSILON,
+                "LINEAR_UPDATED_WEIGHTS {} truth {} prediction {}",
+                i,
+                LINEAR_UPDATED_WEIGHTS[i],
+                flat_w[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_18_x_18_f32() {
+        let mut x: Vec<Vec<f32>> = vec![vec![
+            0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7,
+            1.8,
+        ]];
+        let w: Vec<Vec<f32>> = vec![
+            vec![0.1],
+            vec![0.2],
+            vec![0.3],
+            vec![0.4],
+            vec![0.5],
+            vec![0.6],
+            vec![0.7],
+            vec![0.8],
+            vec![0.9],
+            vec![0.1],
+            vec![0.2],
+            vec![0.3],
+            vec![0.4],
+            vec![0.5],
+            vec![0.6],
+            vec![0.7],
+            vec![0.8],
+            vec![0.9],
+        ];
+        let y: Vec<Vec<f32>> = vec![vec![2.0]];
+        let l = layer_factory::<f32>(
+            Layers::Linear,
+            1, //configuration value. Vector already flattened from previous layer
+            x[0].len(),
+            1, //configuration value. Vector already flattened from previous layer
+            None,
+            0.0,
+        );
+        let b: Vec<Vec<f32>> = vec![];
+
+        let LINEAR_OUTPUT: [f32; 1] = [9.75];
+        let LOSS: [f32; 1] = [60.0625];
+        let GRADIENTS_FROM_LINEAR_TO_PREVIOUS: [f32; 18] = [
+            1.5500001, 3.1000001, 4.65, 6.2000003, 7.75, 9.3, 10.849999, 12.400001, 13.95,
+            1.5500001, 3.1000001, 4.65, 6.2000003, 7.75, 9.3, 10.849999, 12.400001, 13.95,
+        ];
+        let LINEAR_UPDATED_WEIGHTS: [f32; 18] = [
+            0.0845,
+            0.169,
+            0.2535,
+            0.338,
+            0.4225,
+            0.507,
+            0.5915,
+            0.676,
+            0.76049995,
+            -0.054999996,
+            0.029499995,
+            0.114000015,
+            0.1985,
+            0.28300002,
+            0.36750004,
+            0.452,
+            0.53650004,
+            0.621,
+        ];
+
+        let (mut flat_x, mut flat_w, mut flat_b) = l.flatten(x, w, b);
+        let forward_linear = (flat_x.as_slice(), flat_w.as_mut_slice(), flat_b.as_slice());
+        let mut z_linear: Vec<f32> = l.forward(forward_linear, None);
+        assert!(
+            LINEAR_OUTPUT[0] - z_linear[0] < f32::EPSILON,
+            "LINEAR_OUTPUT truth {} prediction {}",
+            LINEAR_OUTPUT[0],
+            z_linear[0]
+        );
+        let (flat_y, squared) = loss_function_factory(LossFunctions::MeanSquares, y, 1.0);
+        let loss = squared.forward(&flat_y, &z_linear);
+        assert!(
+            LOSS[0] - loss[0] < f32::EPSILON,
+            "LOSS truth {} prediction {}",
+            LOSS[0],
+            loss[0]
+        );
+        let mut from_loss_to_linear_grads = squared.backward(z_linear[0], &mut flat_x);
+        let l_backward = (
+            from_loss_to_linear_grads.as_mut_slice(),
+            flat_w.as_mut_slice(),
+            flat_x.as_mut_slice(),
+        );
+
+        let (from_linear_to_previous_grads, _dummy_bias) =
+            l.backward(l_backward, 0.01, z_linear[0]);
+
+        for i in 0..GRADIENTS_FROM_LINEAR_TO_PREVIOUS.len() {
+            assert!(
+                (GRADIENTS_FROM_LINEAR_TO_PREVIOUS[i] - from_linear_to_previous_grads[i]).abs()
+                    < f32::EPSILON,
+                "GRADIENTS_FROM_LINEAR_TO_PREVIOUS {} truth {} prediction {}",
+                i,
+                GRADIENTS_FROM_LINEAR_TO_PREVIOUS[i],
+                from_linear_to_previous_grads[i]
+            );
+        }
+        for i in 0..LINEAR_UPDATED_WEIGHTS.len() {
+            assert!(
+                (LINEAR_UPDATED_WEIGHTS[i] - flat_w[i]).abs() < f32::EPSILON,
+                "LINEAR_UPDATED_WEIGHTS {} truth {} prediction {}",
+                i,
+                LINEAR_UPDATED_WEIGHTS[i],
+                flat_w[i]
+            );
+        }
+    }
+
     #[test]
     fn test_conv2d_conv2d_linear_7_5_3_64() {
         let mut input_layer = vec![
@@ -674,5 +916,4 @@ mod tests {
             );
         }
     }
-
 }
