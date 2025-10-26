@@ -4,8 +4,6 @@
 #include <string.h>
 #include <co5_dl_osx.h>
 
-const unsigned char DOUBLE_REGISTER_COUNT = 8;
-
 unsigned char dot_product_double(unsigned long n, unsigned long d, unsigned long m, double *nXd, double *dXm, double *b, double *out)
 {
     // The correct calculation will come from finding if d == 1 or not
@@ -120,30 +118,6 @@ unsigned char linear_sgd_double(unsigned long n, unsigned long d, unsigned long 
     return 0;
 }
 
-unsigned char squared_loss_double(unsigned long count, double *prediction, double *truth, double *total)
-{
-    __m512d prediction_s = _mm512_setzero_pd();
-    __m512d truth_s = _mm512_setzero_pd();
-    __m512d working_s = _mm512_setzero_pd();
-
-    double *prediction_pointer = prediction;
-    double *truth_pointer = truth;
-    // REMEMBER vectors are filled when flattened so we can safely advance DOUBLE_REGISTER_COUNT
-    count = count / DOUBLE_REGISTER_COUNT + (count % DOUBLE_REGISTER_COUNT != 0);
-    for (unsigned long c = 0; c < count; c++)
-    {
-        prediction_s = _mm512_loadu_pd(prediction_pointer);
-        truth_s = _mm512_loadu_pd(truth_pointer);
-        working_s = _mm512_sub_pd(prediction_s, truth_s); // p - t
-        _mm512_storeu_pd(prediction_pointer, working_s);             // p - t
-        prediction_pointer[c] *= 2;                                 // differential
-        working_s = _mm512_mul_pd(working_s, working_s); // pow 2
-        *total = _mm512_reduce_add_pd(working_s);
-        prediction_pointer += DOUBLE_REGISTER_COUNT;
-        truth_pointer += DOUBLE_REGISTER_COUNT;
-    }
-    return 0;
-}
 
 unsigned char scalar_X_matrix_double(unsigned long count, double *m_inout, double *scalar, double *ret)
 {
