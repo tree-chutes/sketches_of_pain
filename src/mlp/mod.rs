@@ -17,6 +17,11 @@ mod softmax;
 #[cfg(test)]
 mod tests {
 
+    use crate::mlp::{
+        activation_functions::{Activations, activation_function_factory},
+        softmax,
+    };
+
     use super::{
         layers::{Layers, layer_factory},
         loss_functions::{LossFunctions, loss_function_factory},
@@ -48,7 +53,7 @@ mod tests {
             vec![0.8],
             vec![0.9],
         ];
-        let y = vec![vec![2.0]];
+        let y = vec![2.0];
         let l = layer_factory::<f64>(
             Layers::Linear,
             1, //configuration value. Vector already flattened from previous layer
@@ -119,7 +124,7 @@ mod tests {
             LOSS[0],
             loss[0]
         );
-        let mut from_loss_to_linear_grads = squared.backward(z_linear[0], &mut flat_x);
+        let mut from_loss_to_linear_grads = squared.backward(&z_linear, &mut flat_x);
         let l_backward = (
             from_loss_to_linear_grads.as_mut_slice(),
             flat_w.as_mut_slice(),
@@ -176,7 +181,7 @@ mod tests {
             vec![0.8],
             vec![0.9],
         ];
-        let y: Vec<Vec<f32>> = vec![vec![2.0]];
+        let y: Vec<f32> = vec![2.0];
         let l = layer_factory::<f32>(
             Layers::Linear,
             1, //configuration value. Vector already flattened from previous layer
@@ -231,7 +236,7 @@ mod tests {
             LOSS[0],
             loss[0]
         );
-        let mut from_loss_to_linear_grads = squared.backward(z_linear[0], &mut flat_x);
+        let mut from_loss_to_linear_grads = squared.backward(&z_linear, &mut flat_x);
         let l_backward = (
             from_loss_to_linear_grads.as_mut_slice(),
             flat_w.as_mut_slice(),
@@ -302,7 +307,7 @@ mod tests {
             vec![0.9],
         ];
 
-        let linear_bias = vec![vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]];
+        let linear_bias = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
         //Pytorch matches
         let CONV_0_OUTPUT = [
@@ -538,7 +543,7 @@ mod tests {
         );
 
         let (flat_loss, squared) =
-            loss_function_factory(LossFunctions::MeanSquares, vec![vec![2.0]], 1.0);
+            loss_function_factory(LossFunctions::MeanSquares, vec![2.0], 1.0);
         let mut loss = squared.forward(&flat_loss, &z_linear);
         assert!(
             LOSS[0] - loss[0] < f64::EPSILON,
@@ -548,7 +553,7 @@ mod tests {
         );
 
         //BACKPASS
-        let mut from_loss_to_linear_grads = squared.backward(z_linear[0], z_conv_1.as_mut_slice());
+        let mut from_loss_to_linear_grads = squared.backward(&z_linear, z_conv_1.as_mut_slice());
 
         for i in 0..LINEAR_WEIGHTS_GRADIENTS.len() {
             assert!(
@@ -817,7 +822,7 @@ mod tests {
         );
 
         let (flat_loss, squared) =
-            loss_function_factory(LossFunctions::MeanSquares, vec![vec![2.0]], 1.0);
+            loss_function_factory(LossFunctions::MeanSquares, vec![2.0], 1.0);
         let mut loss = squared.forward(&flat_loss, &z_linear);
         assert!(
             LOSS[0] - loss[0] < f32::EPSILON,
@@ -827,7 +832,7 @@ mod tests {
         );
 
         //BACKPASS
-        let mut from_loss_to_linear_grads = squared.backward(z_linear[0], z_conv_1.as_mut_slice());
+        let mut from_loss_to_linear_grads = squared.backward(&z_linear, z_conv_1.as_mut_slice());
 
         for i in 0..LINEAR_WEIGHTS_GRADIENTS.len() {
             assert!(
@@ -909,6 +914,521 @@ mod tests {
         for i in 0..CONV_0_UPDATED_WEIGHTS.len() {
             assert!(
                 (CONV_0_UPDATED_WEIGHTS[i] - flat_conv_0_kernel[i]).abs() < f32::EPSILON,
+                "GRADIENTS_FROM_CONV_1_TO_CONV_0 {} truth {} prediction {}",
+                i,
+                CONV_0_UPDATED_WEIGHTS[i],
+                flat_conv_0_kernel[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_conv2d_conv2d_softmax_7_5_3_32() {
+        let mut input_layer: Vec<Vec<f32>> = vec![
+            vec![1.0, 0.5, 1.2, 0.8, 1.5, 0.9, 1.3, 0.7, 1.1],
+            vec![0.6, 1.4, 0.8, 1.7, 1.0, 1.6, 0.9, 1.2, 0.5],
+            vec![1.3, 0.7, 1.8, 1.1, 1.4, 0.6, 1.9, 1.0, 1.5],
+            vec![0.9, 1.2, 0.8, 1.6, 1.3, 1.1, 0.7, 1.4, 0.9],
+            vec![1.1, 0.8, 1.5, 1.0, 1.7, 1.2, 1.4, 0.6, 1.3],
+            vec![0.7, 1.3, 0.9, 1.4, 1.1, 1.8, 1.0, 1.5, 0.8],
+            vec![1.2, 0.6, 1.4, 0.9, 1.3, 1.0, 1.6, 1.1, 1.7],
+            vec![0.8, 1.1, 0.7, 1.5, 1.2, 1.4, 0.9, 1.3, 1.0],
+            vec![1.0, 1.5, 0.8, 1.2, 0.9, 1.3, 1.1, 0.7, 1.4],
+        ];
+
+        let conv_0_weights: Vec<Vec<f32>> = vec![
+            vec![0.1, 0.2, 0.3, 0.2, 0.1],
+            vec![0.2, 0.4, 0.6, 0.4, 0.2],
+            vec![0.3, 0.6, 0.9, 0.6, 0.3],
+            vec![0.2, 0.4, 0.6, 0.4, 0.2],
+            vec![0.1, 0.2, 0.3, 0.2, 0.1],
+        ];
+
+        let conv_1_weights: Vec<Vec<f32>> = vec![
+            vec![1.0, 0.5, 0.2],
+            vec![0.5, 1.0, 0.5],
+            vec![0.2, 0.5, 1.0],
+        ];
+
+        let target: Vec<f32> = vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+
+        //Pytorch matches
+        let CONV_0_OUTPUT: [f32; 25] = [
+            9.55, 9.960001, 10.09, 9.63, 9.41, 9.59, 10.17, 10.27, 9.87, 9.44, 9.430001, 10.01,
+            10.4, 10.11, 9.78, 9.040001, 9.82, 10.280001, 10.339999, 9.97, 8.81, 9.450001, 9.93,
+            10.1, 10.000001,
+        ];
+
+        let CONV_1_OUTPUT: [f32; 9] = [
+            53.939003, 54.533, 53.427002, 53.652, 55.183, 54.489, 52.412003, 54.547005, 54.912003,
+        ];
+
+        let SOFTMAX_OUTPUT: [f32; 9] = [
+            0.07110593,
+            0.12878813,
+            0.042613436,
+            0.053365696,
+            0.24669835,
+            0.123243995,
+            0.015443223,
+            0.13060433,
+            0.18813697,
+        ];
+
+        let LOSS: [f32; 1] = [1.39958906];
+
+        let GRADIENTS_FROM_SOFTMAX_TO_CONV_1: [f32; 9] = [
+            0.07110592,
+            0.12878813,
+            0.042613436,
+            0.053365692,
+            -0.7533017,
+            0.12324399,
+            0.015443223,
+            0.13060433,
+            0.18813697,
+        ];
+
+        let CONV_1_UPDATED_WEIGHTS: [f32; 9] = [
+            1.0008222, 0.50144273, 0.2004392, 0.49970064, 1.0014815, 0.50066954, 0.20006706,
+            0.5012054, 1.0019966,
+        ];
+
+        let CONV_0_UPDATED_WEIGHTS: [f32; 25] = [
+            0.104207866,
+            0.19981067,
+            0.3029162,
+            0.19548263,
+            0.105743065,
+            0.1946472,
+            0.40605077,
+            0.59887195,
+            0.40159434,
+            0.19267999,
+            0.30113584,
+            0.5960225,
+            0.90617836,
+            0.6001727,
+            0.3006112,
+            0.19622856,
+            0.40163812,
+            0.5968574,
+            0.40639856,
+            0.20022276,
+            0.10294295,
+            0.19802988,
+            0.30219632,
+            0.19828108,
+            0.104990445,
+        ];
+        //Pytorch matches END
+
+        let bias: Vec<Vec<f32>> = vec![];
+        let p_s = (0 as u16, 1 as u16);
+        let mut conv_layer_0 = layer_factory::<f32>(
+            Layers::Conv2D,
+            input_layer.len(),
+            conv_0_weights.len(),
+            input_layer[0].len(),
+            Some(p_s),
+            0.0,
+        );
+
+        conv_layer_0.set_first_layer_flag();
+
+        let (mut flat_input_layer, mut flat_conv_0_kernel, mut flat_conv_0_bias) =
+            conv_layer_0.flatten(input_layer, conv_0_weights, bias);
+        let forward_conv_0 = (
+            flat_input_layer.as_slice(),
+            flat_conv_0_kernel.as_mut_slice(),
+            flat_conv_0_bias.as_slice(),
+        );
+
+        let mut z_conv_0: Vec<f32> = conv_layer_0.forward(forward_conv_0, None);
+        for i in 0..CONV_0_OUTPUT.len() {
+            assert!(
+                (CONV_0_OUTPUT[i] - z_conv_0[i]).abs() < f32::EPSILON,
+                "CONV_0_OUTPUT {} truth {} prediction {}",
+                i,
+                CONV_0_OUTPUT[i],
+                z_conv_0[i]
+            );
+        }
+
+        let conv_layer_1 = layer_factory::<f32>(
+            Layers::Conv2D,
+            5, //configuration value
+            conv_1_weights.len(),
+            5, //configuration value
+            Some(p_s),
+            0.0,
+        );
+        let mut flat_conv_1_kernel = conv_layer_1.flatten_kernel(conv_1_weights);
+        let forward_conv_1 = (
+            z_conv_0.as_slice(),
+            flat_conv_1_kernel.as_mut_slice(),
+            flat_conv_0_bias.as_slice(),
+        );
+
+        let mut z_conv_1: Vec<f32> = conv_layer_1.forward(forward_conv_1, None);
+
+        for i in 0..CONV_1_OUTPUT.len() {
+            assert!(
+                (CONV_1_OUTPUT[i] - z_conv_1[i]).abs() < f32::EPSILON,
+                "CONV_1_OUTPUT {} truth {} prediction {}",
+                i,
+                CONV_1_OUTPUT[i],
+                z_conv_1[i]
+            );
+        }
+        let softmax = activation_function_factory::<f32>(
+            Activations::Softmax,
+            target.len(),
+            0.0, //configuration value. Vector already flattened from previous layer
+        );
+
+        let mut z_softmax: Vec<f32> = softmax.forward(&z_conv_1);
+
+        for i in 0..SOFTMAX_OUTPUT.len() {
+            assert!(
+                (SOFTMAX_OUTPUT[i] - z_softmax[i]).abs() < f32::EPSILON,
+                "SOFTMAX_OUTPUT {} truth {} prediction {}",
+                i,
+                SOFTMAX_OUTPUT[i],
+                z_softmax[i]
+            );
+        }
+
+        let (filled_target, cross_entropy) =
+            loss_function_factory(LossFunctions::CrossEntropy, target, 0.0);
+        let mut loss = cross_entropy.forward(&filled_target, &z_softmax);
+        assert!(
+            LOSS[0] - loss[0] < f32::EPSILON,
+            "LOSS truth {} prediction {}",
+            LOSS[0],
+            loss[0]
+        );
+
+        //BACKPASS
+        let mut from_softmax_to_conv_1 = softmax.backward(&filled_target, &z_softmax);
+
+        for i in 0..GRADIENTS_FROM_SOFTMAX_TO_CONV_1.len() {
+            assert!(
+                (GRADIENTS_FROM_SOFTMAX_TO_CONV_1[i] - from_softmax_to_conv_1[i]).abs()
+                    < f32::EPSILON,
+                "GRADIENTS_FROM_SOFTMAX_TO_CONV_1 {} truth {} prediction {}",
+                i,
+                GRADIENTS_FROM_SOFTMAX_TO_CONV_1[i],
+                from_softmax_to_conv_1[i]
+            );
+        }
+
+        let conv_1_backward = (
+            z_conv_0.as_mut_slice(),
+            from_softmax_to_conv_1.as_mut_slice(),
+            flat_conv_1_kernel.as_mut_slice(),
+        );
+
+        let (flat_conv_1_kernel, mut from_conv_1_to_conv_0_grads) =
+            conv_layer_1.backward(conv_1_backward, 0.01, 0.0);
+        for i in 0..CONV_1_UPDATED_WEIGHTS.len() {
+            assert!(
+                (CONV_1_UPDATED_WEIGHTS[i] - flat_conv_1_kernel[i]).abs() < f32::EPSILON,
+                "CONV_1_UPDATED_WEIGHTS {} truth {} prediction {}",
+                i,
+                CONV_1_UPDATED_WEIGHTS[i],
+                flat_conv_1_kernel[i]
+            );
+        }
+
+        let conv_0_backward = (
+            flat_input_layer.as_mut_slice(),
+            from_conv_1_to_conv_0_grads.as_mut_slice(),
+            flat_conv_0_kernel.as_mut_slice(),
+        );
+
+        let (flat_conv_0_kernel, _not_needed) = conv_layer_0.backward(conv_0_backward, 0.01, 0.0);
+
+        for i in 0..CONV_0_UPDATED_WEIGHTS.len() {
+            assert!(
+                (CONV_0_UPDATED_WEIGHTS[i] - flat_conv_0_kernel[i]).abs() < f32::EPSILON,
+                "GRADIENTS_FROM_CONV_1_TO_CONV_0 {} truth {} prediction {}",
+                i,
+                CONV_0_UPDATED_WEIGHTS[i],
+                flat_conv_0_kernel[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_conv2d_conv2d_softmax_7_5_3_64() {
+        let mut input_layer: Vec<Vec<f64>> = vec![
+            vec![1.0, 0.5, 1.2, 0.8, 1.5, 0.9, 1.3, 0.7, 1.1],
+            vec![0.6, 1.4, 0.8, 1.7, 1.0, 1.6, 0.9, 1.2, 0.5],
+            vec![1.3, 0.7, 1.8, 1.1, 1.4, 0.6, 1.9, 1.0, 1.5],
+            vec![0.9, 1.2, 0.8, 1.6, 1.3, 1.1, 0.7, 1.4, 0.9],
+            vec![1.1, 0.8, 1.5, 1.0, 1.7, 1.2, 1.4, 0.6, 1.3],
+            vec![0.7, 1.3, 0.9, 1.4, 1.1, 1.8, 1.0, 1.5, 0.8],
+            vec![1.2, 0.6, 1.4, 0.9, 1.3, 1.0, 1.6, 1.1, 1.7],
+            vec![0.8, 1.1, 0.7, 1.5, 1.2, 1.4, 0.9, 1.3, 1.0],
+            vec![1.0, 1.5, 0.8, 1.2, 0.9, 1.3, 1.1, 0.7, 1.4],
+        ];
+
+        let conv_0_weights: Vec<Vec<f64>> = vec![
+            vec![0.1, 0.2, 0.3, 0.2, 0.1],
+            vec![0.2, 0.4, 0.6, 0.4, 0.2],
+            vec![0.3, 0.6, 0.9, 0.6, 0.3],
+            vec![0.2, 0.4, 0.6, 0.4, 0.2],
+            vec![0.1, 0.2, 0.3, 0.2, 0.1],
+        ];
+
+        let conv_1_weights: Vec<Vec<f64>> = vec![
+            vec![1.0, 0.5, 0.2],
+            vec![0.5, 1.0, 0.5],
+            vec![0.2, 0.5, 1.0],
+        ];
+
+        let target: Vec<f64> = vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+
+        //Pytorch matches
+        let CONV_0_OUTPUT: [f64; 25] = [
+            9.55,
+            9.96,
+            10.090000000000002,
+            9.63,
+            9.41,
+            9.59,
+            10.169999999999998,
+            10.270000000000001,
+            9.870000000000001,
+            9.44,
+            9.430000000000001,
+            10.01,
+            10.4,
+            10.110000000000001,
+            9.780000000000001,
+            9.04,
+            9.82,
+            10.28,
+            10.34,
+            9.97,
+            8.81,
+            9.450000000000001,
+            9.930000000000003,
+            10.100000000000001,
+            10.000000000000002,
+        ];
+
+        let CONV_1_OUTPUT: [f64; 9] = [
+            53.93899999999999,
+            54.533,
+            53.42700000000001,
+            53.651999999999994,
+            55.18300000000001,
+            54.489000000000004,
+            52.412000000000006,
+            54.547000000000004,
+            54.912000000000006,
+        ];
+
+        let SOFTMAX_OUTPUT: [f64; 9] = [
+            0.07110578370315829,
+            0.12878813367026348,
+            0.04261339666475928,
+            0.053365724657371987,
+            0.2466989283378904,
+            0.12324431419132675,
+            0.015443198494724494,
+            0.13060384788457913,
+            0.18813667239592613,
+        ];
+
+        let LOSS: [f64; 1] = [1.3995865994453556];
+
+        let GRADIENTS_FROM_SOFTMAX_TO_CONV_1: [f64; 9] = [
+            0.07110578370315829,
+            0.12878813367026348,
+            0.04261339666475928,
+            0.053365724657371987,
+            -0.7533010716621096,
+            0.12324431419132675,
+            0.015443198494724494,
+            0.13060384788457913,
+            0.18813667239592613,
+        ];
+
+        let CONV_1_UPDATED_WEIGHTS: [f64; 9] = [
+            1.000822210024786,
+            0.5014427012798333,
+            0.2004391928919241,
+            0.4997006341449296,
+            1.0014815308880989,
+            0.5006695267136412,
+            0.20006704641119477,
+            0.5012053564002483,
+            1.0019966386907422,
+        ];
+
+        let CONV_0_UPDATED_WEIGHTS: [f64; 25] = [
+            0.1042078632628407,
+            0.19981067162110405,
+            0.30291617583384767,
+            0.1954826290720654,
+            0.10574305732033244,
+            0.1946471925477919,
+            0.4060507733680276,
+            0.598871907549647,
+            0.40159434848920983,
+            0.19267998555963126,
+            0.3011358214478113,
+            0.5960224695044811,
+            0.9061783718411923,
+            0.6001726746304089,
+            0.3006111893212099,
+            0.19622856763677884,
+            0.4016381008026924,
+            0.5968573902369337,
+            0.4063985406153291,
+            0.20022276203299025,
+            0.10294294806463847,
+            0.19802987714973397,
+            0.3021963127483178,
+            0.19828106915718474,
+            0.10499043987924794,
+        ];
+        //Pytorch matches END
+
+        let bias: Vec<Vec<f64>> = vec![];
+        let p_s = (0 as u16, 1 as u16);
+        let mut conv_layer_0 = layer_factory::<f64>(
+            Layers::Conv2D,
+            input_layer.len(),
+            conv_0_weights.len(),
+            input_layer[0].len(),
+            Some(p_s),
+            0.0,
+        );
+
+        conv_layer_0.set_first_layer_flag();
+
+        let (mut flat_input_layer, mut flat_conv_0_kernel, mut flat_conv_0_bias) =
+            conv_layer_0.flatten(input_layer, conv_0_weights, bias);
+        let forward_conv_0 = (
+            flat_input_layer.as_slice(),
+            flat_conv_0_kernel.as_mut_slice(),
+            flat_conv_0_bias.as_slice(),
+        );
+
+        let mut z_conv_0: Vec<f64> = conv_layer_0.forward(forward_conv_0, None);
+
+        for i in 0..CONV_0_OUTPUT.len() {
+            assert!(
+                (CONV_0_OUTPUT[i] - z_conv_0[i]).abs() < f64::EPSILON,
+                "CONV_0_OUTPUT {} truth {} prediction {}",
+                i,
+                CONV_0_OUTPUT[i],
+                z_conv_0[i]
+            );
+        }
+
+        let conv_layer_1 = layer_factory::<f64>(
+            Layers::Conv2D,
+            5, //configuration value
+            conv_1_weights.len(),
+            5, //configuration value
+            Some(p_s),
+            0.0,
+        );
+        let mut flat_conv_1_kernel = conv_layer_1.flatten_kernel(conv_1_weights);
+        let forward_conv_1 = (
+            z_conv_0.as_slice(),
+            flat_conv_1_kernel.as_mut_slice(),
+            flat_conv_0_bias.as_slice(),
+        );
+
+        let mut z_conv_1: Vec<f64> = conv_layer_1.forward(forward_conv_1, None);
+
+        for i in 0..CONV_1_OUTPUT.len() {
+            assert!(
+                (CONV_1_OUTPUT[i] - z_conv_1[i]).abs() < f64::EPSILON,
+                "CONV_1_OUTPUT {} truth {} prediction {}",
+                i,
+                CONV_1_OUTPUT[i],
+                z_conv_1[i]
+            );
+        }
+
+        let softmax = activation_function_factory::<f64>(
+            Activations::Softmax,
+            target.len(),
+            0.0, //configuration value. Vector already flattened from previous layer
+        );
+
+        let mut z_softmax: Vec<f64> = softmax.forward(&z_conv_1);
+
+        for i in 0..SOFTMAX_OUTPUT.len() {
+            assert!(
+                (SOFTMAX_OUTPUT[i] - z_softmax[i]).abs() < f64::EPSILON,
+                "SOFTMAX_OUTPUT {} truth {} prediction {}",
+                i,
+                SOFTMAX_OUTPUT[i],
+                z_softmax[i]
+            );
+        }
+
+        let (filled_target, cross_entropy) =
+            loss_function_factory(LossFunctions::CrossEntropy, target, 0.0);
+        let mut loss = cross_entropy.forward(&filled_target, &z_softmax);
+        assert!(
+            LOSS[0] - loss[0] < f64::EPSILON,
+            "LOSS truth {} prediction {}",
+            LOSS[0],
+            loss[0]
+        );
+
+        //BACKPASS
+        let mut from_softmax_to_conv_1 = softmax.backward(&filled_target, &z_softmax);
+
+        for i in 0..GRADIENTS_FROM_SOFTMAX_TO_CONV_1.len() {
+            assert!(
+                (GRADIENTS_FROM_SOFTMAX_TO_CONV_1[i] - from_softmax_to_conv_1[i]).abs()
+                    < f64::EPSILON,
+                "GRADIENTS_FROM_SOFTMAX_TO_CONV_1 {} truth {} prediction {}",
+                i,
+                GRADIENTS_FROM_SOFTMAX_TO_CONV_1[i],
+                from_softmax_to_conv_1[i]
+            );
+        }
+
+        let conv_1_backward = (
+            z_conv_0.as_mut_slice(),
+            from_softmax_to_conv_1.as_mut_slice(),
+            flat_conv_1_kernel.as_mut_slice(),
+        );
+
+        let (flat_conv_1_kernel, mut from_conv_1_to_conv_0_grads) =
+            conv_layer_1.backward(conv_1_backward, 0.01, 0.0);
+
+        for i in 0..CONV_1_UPDATED_WEIGHTS.len() {
+            assert!(
+                (CONV_1_UPDATED_WEIGHTS[i] - flat_conv_1_kernel[i]).abs() < f64::EPSILON,
+                "CONV_1_UPDATED_WEIGHTS {} truth {} prediction {}",
+                i,
+                CONV_1_UPDATED_WEIGHTS[i],
+                flat_conv_1_kernel[i]
+            );
+        }
+
+        let conv_0_backward = (
+            flat_input_layer.as_mut_slice(),
+            from_conv_1_to_conv_0_grads.as_mut_slice(),
+            flat_conv_0_kernel.as_mut_slice(),
+        );
+
+        let (flat_conv_0_kernel, _not_needed) = conv_layer_0.backward(conv_0_backward, 0.01, 0.0);
+        for i in 0..CONV_0_UPDATED_WEIGHTS.len() {
+            assert!(
+                (CONV_0_UPDATED_WEIGHTS[i] - flat_conv_0_kernel[i]).abs() < f64::EPSILON,
                 "GRADIENTS_FROM_CONV_1_TO_CONV_0 {} truth {} prediction {}",
                 i,
                 CONV_0_UPDATED_WEIGHTS[i],
