@@ -2,7 +2,10 @@
 
 #include <immintrin.h>
 #include <string.h>
+#include <stdio.h>
 #include<co5_dl_osx.h>
+
+const unsigned char FLOAT_REGISTER_COUNT = 16;
 
 unsigned char dot_product_float(unsigned long n, unsigned long d, unsigned long m, float *nXd, float *dXm, float *b, float *out)
 {
@@ -118,6 +121,31 @@ unsigned char linear_sgd_float(unsigned long n, unsigned long d, unsigned long m
     return 0;
 }
 
+unsigned char squared_loss_float(unsigned long count, float *prediction, float *truth, float *total)
+{
+    __m512 prediction_s = _mm512_setzero_ps();
+    __m512 truth_s = _mm512_setzero_ps();
+    __m512 working_s = _mm512_setzero_ps();
+
+    float *prediction_pointer = prediction;
+    float *truth_pointer = truth;
+    // REMEMBER vectors are filled when flattened so we can safely advance FLOAT_REGISTER_COUNT
+    count = count / FLOAT_REGISTER_COUNT + (count % FLOAT_REGISTER_COUNT != 0);
+    for (unsigned long c = 0; c < count; c++)
+    {
+        prediction_s = _mm512_loadu_ps(prediction_pointer);
+        truth_s = _mm512_loadu_ps(truth_pointer);
+        working_s = _mm512_sub_ps(prediction_s, truth_s); // p - t
+        _mm512_storeu_ps(prediction_pointer, working_s);             // p - t
+        prediction_pointer[c] *= 2;                                 // differential
+        working_s = _mm512_mul_ps(working_s, working_s); // pow 2
+        *total = _mm512_reduce_add_ps(working_s);
+        prediction_pointer += FLOAT_REGISTER_COUNT;
+        truth_pointer += FLOAT_REGISTER_COUNT;
+    }
+    return 0;
+}
+
 unsigned char scalar_X_matrix_float(unsigned long count, float *m_inout, float *scalar, float *ret)
 {
     __m512 m_inout_s = _mm512_setzero_ps();
@@ -145,22 +173,22 @@ unsigned char scalar_X_matrix_float(unsigned long count, float *m_inout, float *
     return 0;
 }
 
-unsigned char convolve_2d_float(unsigned long w, unsigned long h, unsigned long k, unsigned long o_w, unsigned long count, unsigned short p, unsigned short s, float *hXw, float *kXk, float *previous, float *learning_rate, float *out)
+unsigned char convolve_2d_float(unsigned long len,  unsigned long w, unsigned long h, unsigned long k, unsigned long o_w, unsigned long count, unsigned short p, unsigned short s, float *hXw, float *kXk, float *previous, float *learning_rate, float *out)
 {
-    unsigned long idx = 0;
-    unsigned long updated_w = w;
-    unsigned short k_counter = 0;
-    unsigned short w_counter = 0;
-    unsigned long register_reset_trigger = k / FLOAT_REGISTER_COUNT + (k % FLOAT_REGISTER_COUNT != 0);
-    unsigned long register_reset_counter = register_reset_trigger; // keeps track of when the pointers need to change
+    unsigned short total = o_w * o_w;
+    unsigned short updated_w = w;
+    unsigned short column_offset = 0; 
+    unsigned short idx0 = 0, idx = 0;
+    unsigned short n = (w + 2 * p - k) / s;
+    unsigned short register_reset_trigger = k / FLOAT_REGISTER_COUNT + (k % FLOAT_REGISTER_COUNT != 0);
 
     __m512 feature_s = _mm512_setzero_ps();
     __m512 kernel_s = _mm512_setzero_ps();
     __m512 working_s = _mm512_setzero_ps();
 
-    float *feature_pointer;
+    float *feature_pointer, *feature_pointer_anchor;
     float *updated_feature_pointer = hXw;
-    float *kernel_pointer = kXk;
+    float *kernel_pointer_anchor, *kernel_pointer = kXk;
     float *working_pointer = malloc(sizeof(float) * FLOAT_REGISTER_COUNT);
 
     if (p != 0)
@@ -175,75 +203,64 @@ unsigned char convolve_2d_float(unsigned long w, unsigned long h, unsigned long 
     }
 
     feature_pointer = updated_feature_pointer;
-    count *= k * register_reset_trigger;
-    for (unsigned long c = 0; c < count; c++)
+
+    do
     {
-        if (c > 0 && c % (k * register_reset_trigger) == 0)
-        {
-            k_counter++;
-            if (k_counter == o_w)
-            {
-                w_counter++;
-                k_counter = 0;
-            }
-            feature_pointer = updated_feature_pointer + (updated_w * w_counter) + s * k_counter;
-            kernel_pointer = kXk;
-            if (previous != NULL)
-            {
-                out[idx] = previous[idx] - learning_rate[0] * out[idx];
-            }
-            idx = c / (k * register_reset_trigger);
-            register_reset_counter = register_reset_trigger;
-        }
-
-        if (k > FLOAT_REGISTER_COUNT)
-        {
-            register_reset_counter--;
-        }
-
-        memset(working_pointer, 0, sizeof(float) * FLOAT_REGISTER_COUNT);
-        feature_s = _mm512_loadu_ps(feature_pointer);
-        kernel_s = _mm512_loadu_ps(kernel_pointer);
-        working_s = _mm512_loadu_ps(working_pointer);
-        working_s = _mm512_fmadd_ps(feature_s, kernel_s, working_s);
-        _mm512_storeu_ps(working_pointer, working_s);
-        if (k < FLOAT_REGISTER_COUNT || register_reset_counter == 0)
-        {
+        feature_pointer_anchor = feature_pointer; 
+        kernel_pointer_anchor = kernel_pointer;
+        for(short i = register_reset_trigger; i > 0; i--)
+        {       
+            memset(working_pointer, 0, sizeof(float) * FLOAT_REGISTER_COUNT);
+            feature_s = _mm512_loadu_ps(feature_pointer);
+            kernel_s = _mm512_loadu_ps(kernel_pointer);
+            working_s = _mm512_loadu_ps(working_pointer);
+            working_s = _mm512_fmadd_ps(feature_s, kernel_s, working_s);
+            _mm512_storeu_ps(working_pointer, working_s);
             // CLEARS fill from working buffer for reducing purposes. Otherwise working buffer contains
             // garbage values for the current idx
             if (k < FLOAT_REGISTER_COUNT)
             {
                 memset(working_pointer + k, 0, sizeof(float) * (FLOAT_REGISTER_COUNT - k));
+                working_s = _mm512_loadu_ps(working_pointer);
+                out[idx0] += _mm512_reduce_add_ps(working_s);
             }
             else
             {
-                memset(working_pointer + k % FLOAT_REGISTER_COUNT, 0, sizeof(float) * (FLOAT_REGISTER_COUNT - k % FLOAT_REGISTER_COUNT));
-            }
-        }
-        working_s = _mm512_loadu_ps(working_pointer);
-        out[idx] += _mm512_reduce_add_ps(working_s);
-
-        if (k < FLOAT_REGISTER_COUNT)
-        {
-            kernel_pointer += k;
-            feature_pointer += updated_w;
-        }
-        else
-        {
-            if (register_reset_counter > 0)
-            {
+                if (i == 1)
+                {
+                    memset(working_pointer + k % FLOAT_REGISTER_COUNT, 0, sizeof(float) * (FLOAT_REGISTER_COUNT - k % FLOAT_REGISTER_COUNT));
+                }
+                working_s = _mm512_loadu_ps(working_pointer);
+                out[idx0] += _mm512_reduce_add_ps(working_s);
+                //These are vectors. By adding FLOAT_REGISTER_COUNT 
+                //we are moving down the register.
+                kernel_pointer += FLOAT_REGISTER_COUNT ;
                 feature_pointer += FLOAT_REGISTER_COUNT;
-                kernel_pointer += FLOAT_REGISTER_COUNT;
+            }
+        }
+        kernel_pointer = kernel_pointer_anchor;
+        feature_pointer = feature_pointer_anchor;
+        feature_pointer += updated_w;
+        kernel_pointer += k ;
+
+        idx++;
+        if (idx % k == 0)
+        {
+            idx0 = idx / k;
+            if (column_offset == n)//end of row
+            {
+                column_offset = 0;
+                updated_feature_pointer += w; //move to the next row
             }
             else
             {
-                // They reset same direction beginning of next row
-                feature_pointer += updated_w - k + 1;
-                kernel_pointer += k % FLOAT_REGISTER_COUNT;
-                register_reset_counter = register_reset_trigger;
+                column_offset++;
             }
+            feature_pointer = updated_feature_pointer + column_offset;
+            kernel_pointer = kXk;
         }
-    }
+    } while (idx0  < total);
+
     // last idx ALREADY set up in loop
     if (previous != NULL)
     {
