@@ -48,10 +48,11 @@ unsafe extern "C" {
         d: c_ulong,
         m: c_ulong,
         learning_rate: *const c_float,
-        weight_gradients: *const c_float,
+        input: *const c_float,
         weights: *const c_float,
         loss_gradient: *const c_float,
-        backpropagating_gradients: *const c_float,
+        updated_weights: *const c_float,
+        updated_input: *const c_float,
     ) -> c_uchar;
 }
 
@@ -78,8 +79,8 @@ impl<F: Float> Layer<F> for LinearLayer<F> {
         assert!(x.len() != 0);
         assert!(x[0].len() != 0);
         assert!(x[0].len() == w.len()); //D
-        assert!(b.len() == x.len());
-        assert!(b[0].len() == x[0].len());
+        // assert!(b.len() == x.len());
+        // assert!(b[0].len() == x[0].len());
         let mut ret_x = Vec::<F>::new();
         let mut b1 = Vec::<F>::new();
         let check = x[0].len();
@@ -162,9 +163,9 @@ impl<F: Float> Layer<F> for LinearLayer<F> {
             - self.d * self.m % (REGISTER_WIDTH / (size_of::<F>() * 8));
         let _biases_len: usize = self.n * self.m + (REGISTER_WIDTH / (size_of::<F>() * 8))
             - self.n * self.m % (REGISTER_WIDTH / (size_of::<F>() * 8));
-
-        if d.0.len() != data_len || d.1.len() != weights_len || d.2.len() != weights_len {
-            return (vec![], vec![]);
+        
+        if d.0.len() != data_len || d.1.len() != weights_len {
+            todo!("properly log this without causing a shutdown");
         }
         self.execute_backward(d.0, d.1, d.2, l_r, l)
     }
@@ -190,8 +191,6 @@ impl<F: Float> LinearLayer<F> {
     fn execute_forward(&self, x: &[F], w: &mut [F], b: &[F]) -> Vec<F> {
         let mut ret = vec![self.zero; self.n * self.m];
 
-        self.transpose(w, self.d, self.m);
-
         unsafe {
             if size_of::<F>() == 8 {
                 if dot_product_double(
@@ -210,8 +209,8 @@ impl<F: Float> LinearLayer<F> {
                     self.n as c_ulong,
                     self.d as c_ulong,
                     self.m as c_ulong,
-                    w.as_ptr() as *const c_float,
                     x.as_ptr() as *const c_float,
+                    w.as_ptr() as *const c_float,
                     b.as_ptr() as *const c_float,
                     ret.as_ptr() as *const c_float,
                 ) != 0{
@@ -229,16 +228,18 @@ impl<F: Float> LinearLayer<F> {
 
     fn execute_backward(
         &self,
-        weight_gradients: &mut [F],
-        weights: &mut [F],
+        input: &[F],
+        weights: &[F],
         _bias: &[F],
         l_r: F,
         l: F,
     ) -> (Vec<F>, Vec<F>) {
         let out_len = self.d * self.m + (REGISTER_WIDTH / (size_of::<F>() * 8)) - self.d * self.m % (REGISTER_WIDTH / (size_of::<F>() * 8));
-        let backward_gradients = vec![self.zero; out_len];
-        let learning_rate = vec![l_r; (REGISTER_WIDTH / (size_of::<F>() * 8))];
-        let loss_gradient = vec![l; (REGISTER_WIDTH / (size_of::<F>() * 8))];
+        let updated_weights = vec![self.zero; out_len];
+        let updated_input = vec![self.zero; out_len];
+        let learning_rate = vec![l_r; REGISTER_WIDTH / (size_of::<F>() * 8)];
+        //if loss_gradient were a vector, just pass it and avoid this
+        let loss_gradient = vec![l; REGISTER_WIDTH / (size_of::<F>() * 8)];
 
         unsafe {
             if size_of::<F>() == 4 {
@@ -247,10 +248,11 @@ impl<F: Float> LinearLayer<F> {
                     self.m as c_ulong,
                     self.n as c_ulong,
                     learning_rate.as_ptr() as *const c_float,
-                    weight_gradients.as_ptr() as *const c_float,
+                    input.as_ptr() as *const c_float,
                     weights.as_ptr() as *const c_float,
                     loss_gradient.as_ptr() as *const c_float,
-                    backward_gradients.as_ptr() as *const c_float,
+                    updated_weights.as_ptr() as *const c_float,
+                    updated_input.as_ptr() as *const c_float
                 ) != 0{
                     panic!("linear float backpass failed")
                 }
@@ -260,15 +262,15 @@ impl<F: Float> LinearLayer<F> {
                     self.d as c_ulong,
                     self.m as c_ulong,
                     learning_rate.as_ptr() as *const c_double,
-                    weight_gradients.as_ptr() as *const c_double,
+                    input.as_ptr() as *const c_double,
                     weights.as_ptr() as *const c_double,
                     loss_gradient.as_ptr() as *const c_double,
-                    backward_gradients.as_ptr() as *const c_double,
+                    updated_weights.as_ptr() as *const c_double,
                 ) != 0{
                     panic!("linear double backpass failed")
                 }
             }
         }
-        (backward_gradients, vec![])
+        (updated_input, updated_weights)
     }
 }
