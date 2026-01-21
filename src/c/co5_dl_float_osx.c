@@ -81,42 +81,46 @@ unsigned char dot_product_float(unsigned long n, unsigned long d, unsigned long 
     return 0;
 }
 
-unsigned char linear_sgd_float(unsigned long n, unsigned long d, unsigned long m, float *learning_rate, float *weight_gradients, float *weights, float *loss_gradient, float *backpropagating_gradients)
+unsigned char linear_sgd_float(unsigned long n, unsigned long d, unsigned long m, float *learning_rate, float *input, float *weights, float *loss_gradient, float *updated_weights, float *updated_input)
 {
-    // The correct calculation will come from finding if d == 1 or not
+    //NOTE 1: if derivate of loss were a vector an sliding window is in order.
+    //NOTE 2: The correct calculation will come from finding if d == 1 or not
     // if d != 1 then register pointer moves will come from d. If not then n == m
     // either will work
 
-    unsigned long idx = 0;
     unsigned long register_reset_trigger = (d != 1 ? d : n) / FLOAT_REGISTER_COUNT + ((d != 1 ? d : n) % FLOAT_REGISTER_COUNT != 0);
     unsigned long register_reset_counter = register_reset_trigger; // keeps track of when the pointers need to change
     unsigned long count = d != 1 ? n * m * register_reset_trigger : register_reset_trigger;
-    unsigned long offset;
 
-    __m512 weight_gradients_s = _mm512_setzero_ps();
-    __m512 weights_s = _mm512_setzero_ps();
-    __m512 backpropagating_gradients_s = _mm512_setzero_ps();
+    __m512 input_s;
+    __m512 weights_s;
+    __m512 gradients_s;
     __m512 learning_rate_s = _mm512_loadu_ps(learning_rate);
     __m512 loss_gradient_s = _mm512_loadu_ps(loss_gradient);
     __m512i sign_mask_i = _mm512_set1_epi32(0x80000000);    
 
-    float *weight_gradients_pointer = weight_gradients;
+    float *input_pointer = input;
     float *weights_pointer = weights;
     float *loss_gradient_pointer = loss_gradient;
-    float *backpropagating_gradients_pointer = backpropagating_gradients;
+    float *updated_weights_pointer = updated_weights;
+    float *updated_input_pointer = updated_input;
 
     for (unsigned long c = 0; c < count; c++)
     {
-        weight_gradients_s = _mm512_loadu_ps(weight_gradients_pointer);
+        input_s = _mm512_loadu_ps(input_pointer);
         weights_s = _mm512_loadu_ps(weights_pointer);
-        backpropagating_gradients_s = _mm512_mul_ps(weights_s, loss_gradient_s);
-        weights_s = _mm512_fmsub_ps(weight_gradients_s, learning_rate_s, weights_s);
-        weights_s = _mm512_castsi512_ps(_mm512_xor_si512(_mm512_castps_si512(weights_s), sign_mask_i));
-        _mm512_storeu_ps(backpropagating_gradients_pointer, backpropagating_gradients_s);
-        _mm512_storeu_ps(weights_pointer, weights_s);
-        weight_gradients_pointer += FLOAT_REGISTER_COUNT;
+        //First weights
+        gradients_s = _mm512_mul_ps(input_s, loss_gradient_s);
+        gradients_s = _mm512_fmsub_ps(gradients_s, learning_rate_s, weights_s);
+        gradients_s = _mm512_castsi512_ps(_mm512_xor_si512(_mm512_castps_si512(gradients_s), sign_mask_i));        
+        _mm512_storeu_ps(updated_weights_pointer, gradients_s);
+        //Second input
+        gradients_s = _mm512_mul_ps(weights_s, loss_gradient_s);
+        _mm512_storeu_ps(updated_input_pointer, gradients_s);
+        input_pointer += FLOAT_REGISTER_COUNT;
         weights_pointer += FLOAT_REGISTER_COUNT;
-        backpropagating_gradients_pointer += FLOAT_REGISTER_COUNT;
+        updated_weights_pointer += FLOAT_REGISTER_COUNT;
+        updated_input_pointer += FLOAT_REGISTER_COUNT;
     }
     return 0;
 }
@@ -137,7 +141,7 @@ unsigned char squared_loss_float(unsigned long count, float *prediction, float *
         truth_s = _mm512_loadu_ps(truth_pointer);
         working_s = _mm512_sub_ps(prediction_s, truth_s); // p - t
         _mm512_storeu_ps(prediction_pointer, working_s);             // p - t
-        prediction_pointer[c] *= 2;                                 // differential
+        prediction_pointer[c] *= 2.0;                                 // differential
         working_s = _mm512_mul_ps(working_s, working_s); // pow 2
         *total = _mm512_reduce_add_ps(working_s);
         prediction_pointer += FLOAT_REGISTER_COUNT;
@@ -233,7 +237,7 @@ unsigned char convolve_2d_float(unsigned long len,  unsigned long w, unsigned lo
                 working_s = _mm512_loadu_ps(working_pointer);
                 out[idx0] += _mm512_reduce_add_ps(working_s);
                 //These are vectors. By adding FLOAT_REGISTER_COUNT 
-                //we are moving down the register.
+                //we are moving down by register.
                 kernel_pointer += FLOAT_REGISTER_COUNT ;
                 feature_pointer += FLOAT_REGISTER_COUNT;
             }
